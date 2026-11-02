@@ -1,0 +1,94 @@
+name: CI
+
+# Scope note: there is no application code yet, so this workflow deliberately
+# runs no tests and no linting. It enforces the R3 secret-scanning requirement
+# (docs/threat-model.md section 5.3), guards dependency drift, and verifies the
+# environment builds on all three team operating systems.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secret-scan:
+    name: Secret scan (full history)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks needs the whole history, not just the tip commit.
+          fetch-depth: 0
+
+      # Run gitleaks via its Docker image rather than gitleaks-action, which
+      # requires a paid GITLEAKS_LICENSE for organization-owned repos. This is
+      # the exact command and pinned version verified locally against this
+      # repository's history. --redact keeps any finding out of the CI log.
+      - name: gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" \
+            zricethezav/gitleaks:v8.21.2 git /repo --no-banner --redact
+
+  deps:
+    name: Lockfile and manifest integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: uv.lock is in sync with pyproject.toml
+        run: uv lock --check
+
+      # The export header embeds the command line, so the -o path must match
+      # the committed filename exactly or this produces a spurious diff.
+      - name: requirements.txt matches uv.lock
+        run: |
+          uv export --format requirements-txt --no-hashes \
+            --no-emit-project --no-dev -o requirements.txt
+          git diff --exit-code -- requirements.txt
+
+  environment:
+    name: Environment (${{ matrix.os }})
+    # This repository is private: macOS runners bill at 10x and Windows at 2x
+    # against the free 2,000 minutes/month. The cheap Linux jobs above run on
+    # every push, but the matrix is limited to pull requests into main.
+    if: github.event_name == 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # --locked fails if uv.lock is stale rather than silently updating it.
+      - name: Build the environment from the lockfile
+        run: uv sync --locked
+
+      - name: Interpreter must be 3.12
+        shell: bash
+        run: |
+          uv run python -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version; print(sys.version)"
+
+      # Proves the Ollama client imports on this platform. It does not contact
+      # a model: pulling 2 GB per run would be wasteful, and the loopback bind
+      # check in the README is inherently a local check.
+      - name: Runtime dependencies import
+        shell: bash
+        run: |
+          uv run python -c "import ollama, pypdf, keyring, cryptography; print('imports OK')"

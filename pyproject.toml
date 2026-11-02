@@ -24,6 +24,15 @@ ml = [
     "streamlit>=1.39.0",
 ]
 
+[dependency-groups]
+# Installed by default on `uv sync`, so every teammate gets the hook tooling
+# without a separate step. Pure Python, so it works on all three OSes with no
+# Go toolchain (which rules out gitleaks as the local hook - see R3 notes).
+dev = [
+    "pre-commit>=4.0.0",
+    "detect-secrets>=1.5.0",
+]
+
 [tool.uv]
 # Keep the lockfile resolvable for every teammate's platform, not just the one
 # that happened to run `uv lock`.

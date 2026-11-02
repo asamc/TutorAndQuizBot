@@ -103,16 +103,42 @@ them: `uv sync --extra ml`.
 git clone https://github.com/asamc/TutorAndQuizBot.git
 cd TutorAndQuizBot
 uv sync
+uv run pre-commit install    # required - see Secret scanning below
 ```
 
 `uv sync` reads `.python-version` and `pyproject.toml`, fetches Python 3.12 if you do not have it,
-creates `.venv`, and installs the locked dependencies.
+creates `.venv`, and installs the locked dependencies including the hook tooling.
 
 **There is no activation step.** Prefix commands with `uv run` instead — `uv run python -V`,
 `uv run pytest`. This is identical on Windows, Linux, and macOS, which avoids the
 `source .venv/bin/activate` versus `.venv\Scripts\activate` split.
 
 Not using uv? `pip install -r requirements.txt` into your own Python 3.12 environment works.
+Note that `requirements.txt` holds runtime dependencies only — install `pre-commit` and
+`detect-secrets` yourself if you go that route.
+
+### Secret scanning
+
+A secret scanner runs on every commit. This is a required defence for R3
+(see [docs/threat-model.md](docs/threat-model.md) section 5.3), so **everyone must run
+`uv run pre-commit install` once after cloning.** Without it the hooks do not fire for you.
+
+On each commit, `detect-secrets` checks staged changes against `.secrets.baseline` and blocks the
+commit on a match. Three backstops run alongside it: private-key detection, a merge-conflict check,
+and a 5 MB file-size cap that catches model weights or course PDFs slipping past `.gitignore`.
+
+Verified behaviour: a planted fake Brave key and AWS secret were both caught, and `git commit`
+exited non-zero without creating the commit.
+
+If the scanner flags something that is genuinely not a secret, mark it inline rather than disabling
+the hook:
+
+```python
+SOME_VALUE = "looks-random-but-is-not"  # pragma: allowlist secret
+```
+
+The local hook is opt-in by nature, so it is a convenience, not the enforcement point — CI re-runs a
+secret scan over the full history on every push, and that is what gates a merge.
 
 ### 3. Install Ollama and pull the model
 
