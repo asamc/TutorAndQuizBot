@@ -173,13 +173,33 @@ flowchart LR
 
 Everything except the Internet Lookup module stays inside the boundary. The threat model describes the risks at this boundary.
 
-## 5. Open Items
+## 5. Decisions and Open Items
 
-These are deliberately left open until the team agrees on them.
+### 5.1 Decided
+
+**Model runtime: Ollama** (decided 2026-11-02, TUT-56).
+
+Chosen over the llama.cpp server and llama-cpp-python because it installs in one command on all
+three team operating systems, whereas the alternatives need per-platform build steps. Ollama also
+**binds to `127.0.0.1:11434` by default**, so the "no outbound access" requirement for the local
+model is satisfied structurally rather than by configuration we have to maintain. Verified on the
+reference machine: Ollama 0.40.13, listening on loopback only, `llama3.2:3b` answering correctly at
+~17.7 tok/s on CPU.
+
+**One base model with two prompt profiles** (decided 2026-11-02, TUT-57).
+
+Not merely the simpler option — the only one that fits. `llama3.2:3b` holds ~2.4 GB resident
+(Ollama reports 2.6 GB at a 4096-token context). The reference machine has ~5 GiB free after the
+desktop session, so a second concurrently loaded model would not fit, and a 3B plus an 8B pair
+certainly would not. The prompt profile is therefore a parameter of the single `llm/` wrapper, and
+separate adapters are ruled out for the base build.
+
+Both decisions assume CPU inference: the reference machine has Intel Arc integrated graphics and no
+CUDA. Teammates on Apple Silicon will see faster results through Metal, with no code difference.
+
+### 5.2 Still open
 
 - **Process layout.** The system will run as several processes, but the split and the communication method depend on the team's operating systems (Windows, Linux, macOS).
-- **Model runtime.** Candidates include the llama.cpp server, Ollama, and llama-cpp-python. Cross-platform setup effort will drive the choice.
-- **One model or two.** Current plan is one base model with two prompt profiles. Separate adapters remain possible.
 - **Vector store.** Faiss is the planned option. The encrypted-at-rest approach for the bonus build depends on this choice.
 - **Citation granularity.** Page or slide numbers are likely sufficient, but PDF section detection may need work.
 - **Ingest isolation.** Whether parsing runs in a separate process depends on the process layout decision and on whether malicious file ingestion becomes R4.

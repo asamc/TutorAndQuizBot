@@ -1,0 +1,47 @@
+[project]
+name = "tutorandquizbot"
+version = "0.1.0"
+description = "Privacy-preserving local network-security tutor and quiz generator"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+
+# Verify-only dependency set. Enough to prove an environment works and to read
+# course files; nothing here supports code that has not been written yet.
+dependencies = [
+    "ollama>=0.4.0",      # client for the local Ollama runtime (loopback only)
+    "pypdf>=5.0.0",       # PDF text extraction for the ingest pipeline
+    "keyring>=25.0.0",    # OS keychain access for the lookup API key (R3)
+    "cryptography>=43.0", # AES-256-GCM for the bonus encrypted index (R2)
+]
+
+[project.optional-dependencies]
+# Declared but deliberately NOT installed yet. Install with: uv sync --extra ml
+# Adds roughly 2-3 GB. Pull this in only when the retrieval or UI code lands.
+ml = [
+    "faiss-cpu>=1.9.0",
+    "sentence-transformers>=3.0.0",
+    "torch>=2.4.0",
+    "streamlit>=1.39.0",
+]
+
+[tool.uv]
+# Keep the lockfile resolvable for every teammate's platform, not just the one
+# that happened to run `uv lock`.
+environments = [
+    "sys_platform == 'linux'",
+    "sys_platform == 'darwin'",
+    "sys_platform == 'win32'",
+]
+
+[tool.uv.sources]
+# On Linux, the default PyPI torch wheel drags in 18 NVIDIA/CUDA packages
+# (~2-3 GB) that are useless without CUDA. macOS and Windows already default to
+# CPU wheels, so scope this override to Linux only.
+torch = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

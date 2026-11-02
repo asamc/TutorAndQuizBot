@@ -30,7 +30,9 @@ User -> UI -> Tutor Agent / Quiz Agent -> Retrieval (vector DB) -> Local Llama
                                   Internet Lookup Module (no doc access) -> external API
 ```
 
-See [docs/architecture.md](docs/architecture.md) for the full design and [docs/threat-model.md](docs/threat-model.md) for the threat model.
+See [docs/architecure.md](docs/architecure.md) for the full design and [docs/threat-model.md](docs/threat-model.md) for the threat model.
+
+Work is tracked in Jira: [TutorAndQuizBot board](https://alejoserubio.atlassian.net/jira/software/projects/TUT/boards).
 
 ## Repository Structure
 
@@ -43,7 +45,7 @@ TutorAndQuizBot/
 │   ├── documents/     # Ingested course files (gitignored, never committed)
 │   └── index/         # Vector database and embedding cache (encrypted at rest)
 ├── docs/
-│   ├── architecture.md    # System architecture and data flow
+│   ├── architecure.md     # System architecture and data flow
 │   └── threat-model.md    # Attack surface, risks, and mitigations
 ├── ingest/            # Document parsing, chunking (~500 words), hashing, indexing
 ├── internet/          # Internet lookup module (only component with outbound access)
@@ -73,26 +75,90 @@ TutorAndQuizBot/
 
 ## Prerequisites
 
-- Python 3.10+ (planned)
-- A local Llama-family model in GGUF format (planned runtime: llama.cpp or Ollama)
-- A sentence-embedding model from the Sentence Transformers library
-- A vector store (Faiss planned; Qdrant, Weaviate, or Milvus are alternatives)
-- Streamlit for the UI (planned)
-- Optional: an API key for the internet lookup provider, stored in an environment variable
+- **Python 3.12** — pinned in `.python-version`; uv installs it for you, so no manual install needed
+- **[uv](https://docs.astral.sh/uv/)** for environment management
+- **[Ollama](https://ollama.com)** as the local model runtime
+- **`llama3.2:3b`** — one model serves both agents via separate prompt profiles
+- Optional: an API key for the internet lookup provider, read from the OS keychain
 
-Exact versions will be listed in `requirements.txt` once the stack is confirmed.
+Versions are pinned in `pyproject.toml` and `uv.lock`. A pip-compatible `requirements.txt` is
+exported from the lockfile for anyone not using uv.
 
-## Setup (Planned)
+The sentence-embedding model, vector store, and Streamlit are declared as the `ml` extra but are
+**not installed by default** — they add roughly 2–3 GB. Install them when you start work that needs
+them: `uv sync --extra ml`.
+
+## Setup
+
+### 1. Install uv
+
+| OS | Command |
+|---|---|
+| Linux / macOS | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| Windows (PowerShell) | `irm https://astral.sh/uv/install.ps1 \| iex` |
+
+### 2. Clone and create the environment
 
 ```bash
 git clone https://github.com/asamc/TutorAndQuizBot.git
 cd TutorAndQuizBot
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-# place the model file under models/
-export LOOKUP_API_KEY=...   # only if internet lookup is enabled
-streamlit run ui/app.py
+uv sync
 ```
+
+`uv sync` reads `.python-version` and `pyproject.toml`, fetches Python 3.12 if you do not have it,
+creates `.venv`, and installs the locked dependencies.
+
+**There is no activation step.** Prefix commands with `uv run` instead — `uv run python -V`,
+`uv run pytest`. This is identical on Windows, Linux, and macOS, which avoids the
+`source .venv/bin/activate` versus `.venv\Scripts\activate` split.
+
+Not using uv? `pip install -r requirements.txt` into your own Python 3.12 environment works.
+
+### 3. Install Ollama and pull the model
+
+| OS | Command |
+|---|---|
+| Linux | `curl -fsSL https://ollama.com/install.sh \| sh` |
+| macOS | `brew install ollama` |
+| Windows | Installer from [ollama.com/download](https://ollama.com/download) |
+
+```bash
+ollama pull llama3.2:3b
+```
+
+### 4. Verify your environment
+
+Run each of these and check the result. No application code is needed.
+
+| # | Command | Expected |
+|---|---|---|
+| 1 | `uv --version` | 0.13 or newer |
+| 2 | `uv run python -V` | `Python 3.12.x` |
+| 3 | `ollama --version` | 0.40 or newer |
+| 4 | `ollama list` | `llama3.2:3b` is listed |
+| 5 | `ollama run llama3.2:3b "In one sentence: what does TLS protect?"` | A coherent sentence about TLS |
+
+**6. Confirm Ollama is bound to loopback only.** This is the one check whose command differs per OS.
+The result must show `127.0.0.1`, never `0.0.0.0` — otherwise the model is reachable from your
+network, which breaks the trust boundary in the threat model.
+
+| OS | Command |
+|---|---|
+| Linux | `ss -tln \| grep 11434` |
+| macOS | `lsof -iTCP:11434 -sTCP:LISTEN` |
+| Windows | `netstat -an \| findstr 11434` |
+
+### Measured baseline
+
+On the reference machine (15 GiB RAM, Intel Arc integrated graphics, no CUDA, CPU inference):
+
+| Metric | Value |
+|---|---|
+| Generation speed | ~17.7 tok/s |
+| Resident memory, model loaded | ~2.4 GB (Ollama reports 2.6 GB at 4096 context) |
+| Short answer, end to end | ~5 s |
+
+Expect slower results on a machine with fewer cores, and faster on Apple Silicon.
 
 ## Usage (Planned)
 
