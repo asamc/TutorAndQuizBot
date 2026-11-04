@@ -85,8 +85,15 @@ jobs:
     name: Environment (${{ matrix.os }})
     # This repository is private: macOS runners bill at 10x and Windows at 2x
     # against the free 2,000 minutes/month. The cheap Linux jobs above run on
-    # every push, but the matrix is limited to pull requests into main.
-    if: github.event_name == 'pull_request'
+    # every push, but the matrix is limited to pull requests into main plus the
+    # merge commit on main itself.
+    #
+    # Merging a PR fires a `push` event on main, NOT a `pull_request` event, so
+    # the second clause is what covers the merge -- without it the matrix only
+    # ever runs on the PR before it lands.
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
     strategy:
       fail-fast: false
       matrix:
