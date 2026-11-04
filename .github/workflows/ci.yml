@@ -11,6 +11,11 @@ on:
     branches: ["**"]
   pull_request:
     branches: [main]
+  # Escape hatch for the matrix job below, whose `if:` gate otherwise only
+  # fires on a pull request into main or the resulting merge commit. Lets the
+  # expensive macOS/Windows legs be exercised on demand from any branch:
+  #   gh workflow run ci.yml --ref <branch>
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -90,8 +95,10 @@ jobs:
     #
     # Merging a PR fires a `push` event on main, NOT a `pull_request` event, so
     # the second clause is what covers the merge -- without it the matrix only
-    # ever runs on the PR before it lands.
+    # ever runs on the PR before it lands. The third clause is the manual
+    # escape hatch declared in the `on:` block at the top of this file.
     if: >-
+      github.event_name == 'workflow_dispatch' ||
       github.event_name == 'pull_request' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main')
     strategy:
