@@ -79,7 +79,9 @@ Fixed and ordered. The UI can render all six before ingest is implemented.
 validating -> parsing -> screening -> chunking -> embedding -> indexing
 ```
 
-Not every stage reports `current`/`total`. Validation and screening are fast and report neither; embedding reports both and is the slow stage.
+Not every stage reports `current`/`total`. Validation and screening are fast and report neither; chunking and embedding report both.
+
+Chunking is **page-aligned: one chunk per slide or page**, not word-count based. This matters for the UI because it sets the magnitude of `chunk_count` — expect roughly one chunk per page, so a 10-page deck reports about 10 chunks, not 1. Measured on the first two lecture decks: an entire 11-page deck holds only ~440 words, so packing to a word budget would collapse a whole lecture into one chunk and destroy page-level citations.
 
 ## 5. Outcome States
 
@@ -110,7 +112,7 @@ Set `server.maxUploadSize = 50` in `.streamlit/config.toml` so the browser rejec
 
 - **Process layout** (TUT-55, Jacob). In-process is assumed above. A separate process turns section 3 into a wire format.
 - **How much flagged text may be displayed** (TUT-18 against TUT-54). TUT-18 requires the user be told what was flagged and where; TUT-54 and threat-model section 4.3 say the UI never displays raw document content. A flagged excerpt *is* document text. Defensible, because whoever uploaded the file already has it, but it needs an explicit decision and a maximum snippet length. `Flag.excerpt` is typed optional until then; `Flag.pattern` and `Flag.page` are safe to show either way.
-- **Expected ingest duration.** Unmeasured. The `ml` extra is not installed yet, so embedding throughput on this hardware is unknown. The progress UI should not be designed against a guessed figure — a real number will follow once embedding runs.
+- **Expected ingest duration.** Partly measured, and smaller than first assumed. The real lecture decks hold ~440 to ~490 words each across 10 to 11 pages, which is roughly 10 chunks per lecture and a few hundred for a whole semester. Embedding that volume is quick, so **no stage is slow enough to need a progress bar for its own sake** — progress is still worth showing for the larger documents the pipeline should tolerate, but do not design the UI around a long wait. Exact embedding throughput is still unmeasured: the `ml` extra is not installed. A figure will follow once embedding runs.
 
 ### The flagged-injection review
 

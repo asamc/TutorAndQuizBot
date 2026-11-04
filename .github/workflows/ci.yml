@@ -1,9 +1,10 @@
 name: CI
 
-# Scope note: there is no application code yet, so this workflow deliberately
-# runs no tests and no linting. It enforces the R3 secret-scanning requirement
-# (docs/threat-model.md section 5.3), guards dependency drift, and verifies the
-# environment builds on all three team operating systems.
+# Scope note: no linting yet, and no test of the agents or retrieval, which do
+# not exist. This workflow enforces the R3 secret-scanning requirement
+# (docs/threat-model.md section 5.3), guards dependency drift, runs the test
+# suite, and verifies the environment builds on all three team operating
+# systems.
 
 on:
   push:
@@ -58,6 +59,28 @@ jobs:
             --no-emit-project --no-dev -o requirements.txt
           git diff --exit-code -- requirements.txt
 
+  tests:
+    name: Tests
+    # Deliberately NOT gated to pull requests, unlike the matrix job below.
+    # ubuntu bills at 1x and the suite takes seconds, so it runs on every push
+    # -- otherwise the contract test would only run when a PR opens, which is
+    # too late to be useful while building on a branch.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build the environment from the lockfile
+        run: uv sync --locked
+
+      # Guards the contract in docs/ingest-interface.md section 3 against
+      # drifting from ingest/model.py. The UI is built against that document.
+      - name: pytest
+        run: uv run pytest -q
+
   environment:
     name: Environment (${{ matrix.os }})
     # This repository is private: macOS runners bill at 10x and Windows at 2x
@@ -92,3 +115,9 @@ jobs:
         shell: bash
         run: |
           uv run python -c "import ollama, pypdf, keyring, cryptography; print('imports OK')"
+
+      # The suite also runs on ubuntu in the `tests` job on every push. Running
+      # it here adds the macOS and Windows coverage that TUT-11 needs.
+      - name: pytest
+        shell: bash
+        run: uv run pytest -q

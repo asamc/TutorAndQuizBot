@@ -31,6 +31,7 @@ ml = [
 dev = [
     "pre-commit>=4.0.0",
     "detect-secrets>=1.5.0",
+    "pytest>=8.0.0",
 ]
 
 [tool.uv]
@@ -54,3 +55,11 @@ torch = [
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
+
+[tool.pytest.ini_options]
+# The repo root must be importable: there is no [build-system], so this is a uv
+# virtual project and `ingest` is never installed into .venv. Without this,
+# pytest's prepend import mode puts only tests/ on sys.path and `import ingest`
+# fails.
+pythonpath = ["."]
+testpaths = ["tests"]
