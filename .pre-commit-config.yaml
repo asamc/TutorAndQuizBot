@@ -1,0 +1,33 @@
+# Pre-commit hooks for TutorAndQuizBot.
+#
+# Required defence for R3 (API-key leakage): a secret scanner runs on every
+# commit. See docs/threat-model.md section 5.3.
+#
+# Install once after `uv sync`:
+#     uv run pre-commit install
+#
+# This is a local, opt-in layer. CI re-runs a secret scan on push, so a
+# teammate who skips installation is still caught before merge.
+
+repos:
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        name: Detect secrets in staged changes
+        args: ["--baseline", ".secrets.baseline"]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Catches an SSH or PEM private key regardless of filename.
+      - id: detect-private-key
+
+      # Backstop for R2: course material and model weights are gitignored, but
+      # this blocks a large file that slips past those rules anyway. Model
+      # weights are GB-scale and course PDFs live in the ignored data/ tree, so
+      # nothing legitimate in this repo should approach 5 MB.
+      - id: check-added-large-files
+        args: ["--maxkb=5000"]
+
+      - id: check-merge-conflict

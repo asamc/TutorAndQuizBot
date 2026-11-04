@@ -1,0 +1,15 @@
+# Secrets
+**/.env
+
+# Course material, vector index, embedding cache (threat model R2)
+**/data
+
+# Local model weights - large, never committed (README)
+models/*
+!models/__init__.py
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
