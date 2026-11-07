@@ -55,7 +55,8 @@ TutorAndQuizBot/
 ├── security/          # Prompt-injection filters, output redaction, encryption, key handling
 ├── tests/             # Unit tests and adversarial test cases
 ├── ui/                # Central web interface (chat, quiz, upload)
-└── README.md
+├── README.md
+└── SETUP.md           # Every command: environment, hooks, ingest, tests
 ```
 
 ### Component Responsibilities
@@ -87,42 +88,19 @@ exported from the lockfile for anyone not using uv.
 
 The sentence-embedding model, vector store, and Streamlit are declared as the `ml` extra but are
 **not installed by default** — they add roughly 2–3 GB. Install them when you start work that needs
-them: `uv sync --extra ml`.
+them; see [SETUP.md](SETUP.md).
 
-## Setup
+## Setup and usage
 
-### 1. Install uv
+All commands live in **[SETUP.md](SETUP.md)**: environment, secret scanning, Ollama,
+environment verification, running the ingest pipeline, and tests.
 
-| OS | Command |
-|---|---|
-| Linux / macOS | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| Windows (PowerShell) | `irm https://astral.sh/uv/install.ps1 \| iex` |
-
-### 2. Clone and create the environment
-
-```bash
-git clone https://github.com/asamc/TutorAndQuizBot.git
-cd TutorAndQuizBot
-uv sync
-uv run pre-commit install    # required - see Secret scanning below
-```
-
-`uv sync` reads `.python-version` and `pyproject.toml`, fetches Python 3.12 if you do not have it,
-creates `.venv`, and installs the locked dependencies including the hook tooling.
-
-**There is no activation step.** Prefix commands with `uv run` instead — `uv run python -V`,
-`uv run pytest`. This is identical on Windows, Linux, and macOS, which avoids the
-`source .venv/bin/activate` versus `.venv\Scripts\activate` split.
-
-Not using uv? `pip install -r requirements.txt` into your own Python 3.12 environment works.
-Note that `requirements.txt` holds runtime dependencies only — install `pre-commit` and
-`detect-secrets` yourself if you go that route.
-
-### Secret scanning
+## Secret scanning
 
 A secret scanner runs on every commit. This is a required defence for R3
-(see [docs/threat-model.md](docs/threat-model.md) section 5.3), so **everyone must run
-`uv run pre-commit install` once after cloning.** Without it the hooks do not fire for you.
+(see [docs/threat-model.md](docs/threat-model.md) section 5.3), so **everyone must install the
+hooks once after cloning** — see [SETUP.md](SETUP.md). Without that step the hooks do not fire
+for you.
 
 On each commit, `detect-secrets` checks staged changes against `.secrets.baseline` and blocks the
 commit on a match. Three backstops run alongside it: private-key detection, a merge-conflict check,
@@ -131,51 +109,13 @@ and a 5 MB file-size cap that catches model weights or course PDFs slipping past
 Verified behaviour: a planted fake Brave key and AWS secret were both caught, and `git commit`
 exited non-zero without creating the commit.
 
-If the scanner flags something that is genuinely not a secret, mark it inline rather than disabling
-the hook:
-
-```python
-SOME_VALUE = "looks-random-but-is-not"  # pragma: allowlist secret
-```
+If the scanner flags something that is genuinely not a secret, mark it inline with an allowlist
+pragma rather than disabling the hook.
 
 The local hook is opt-in by nature, so it is a convenience, not the enforcement point — CI re-runs a
 secret scan over the full history on every push, and that is what gates a merge.
 
-### 3. Install Ollama and pull the model
-
-| OS | Command |
-|---|---|
-| Linux | `curl -fsSL https://ollama.com/install.sh \| sh` |
-| macOS | `brew install ollama` |
-| Windows | Installer from [ollama.com/download](https://ollama.com/download) |
-
-```bash
-ollama pull llama3.2:3b
-```
-
-### 4. Verify your environment
-
-Run each of these and check the result. No application code is needed.
-
-| # | Command | Expected |
-|---|---|---|
-| 1 | `uv --version` | 0.13 or newer |
-| 2 | `uv run python -V` | `Python 3.12.x` |
-| 3 | `ollama --version` | 0.40 or newer |
-| 4 | `ollama list` | `llama3.2:3b` is listed |
-| 5 | `ollama run llama3.2:3b "In one sentence: what does TLS protect?"` | A coherent sentence about TLS |
-
-**6. Confirm Ollama is bound to loopback only.** This is the one check whose command differs per OS.
-The result must show `127.0.0.1`, never `0.0.0.0` — otherwise the model is reachable from your
-network, which breaks the trust boundary in the threat model.
-
-| OS | Command |
-|---|---|
-| Linux | `ss -tln \| grep 11434` |
-| macOS | `lsof -iTCP:11434 -sTCP:LISTEN` |
-| Windows | `netstat -an \| findstr 11434` |
-
-### Measured baseline
+## Measured baseline
 
 On the reference machine (15 GiB RAM, Intel Arc integrated graphics, no CUDA, CPU inference):
 
