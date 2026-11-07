@@ -6,7 +6,7 @@ Install:
     pip install ollama pypdf python-docx
 
 Make sure Ollama is running, then pull the models (defaults shown):
-    ollama pull llama3.2
+    ollama pull llama3.2:3b
     ollama pull nomic-embed-text
 
 Run:
