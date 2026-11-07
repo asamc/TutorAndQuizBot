@@ -13,3 +13,6 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# TutorBot eval output - contains full slide text from course material (public repo)
+tests/results/

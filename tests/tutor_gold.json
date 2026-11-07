@@ -1,0 +1,210 @@
+{
+  "file": "Network_Security_Midterm_Slides.pdf",
+  "page_note": "Page numbers are 1-based PDF pages; the deck has one slide per page (229 pages). Quotes are copied from pypdf's extracted text, so superscripts appear flattened (e.g. 2^168 -> '2168').",
+  "deck_sections": {"early": "1-76", "middle": "77-153", "late": "154-229"},
+  "questions": [
+    {
+      "id": "Q1",
+      "type": "direct_fact",
+      "section": "early",
+      "tests_extraction": true,
+      "question": "What is the brute-force complexity of Triple DES (3DES) when it uses three different keys?",
+      "reference_answer": "2^168. 3DES with three different keys has a brute-force complexity of 2^168. (The same slide also notes 3DES is FIPS-approved and that its weakness is slow encryption speed.)",
+      "source_pages": [55],
+      "slide_quotes": {
+        "55": "Triple DES with three different keys – brute-force complexity 2168"
+      },
+      "key_points": ["2^168"],
+      "scoring_notes": "Only slide 55 has this fact. pypdf extracts the superscript as plain '2168', so an answer of '2168' (missing the exponent) is a faithful copy of the text but numerically wrong: Accuracy 1 at most. Mixing it up with DES's 56-bit key (slides 52-53) or claiming 2^112 as the answer: Accuracy 0."
+    },
+    {
+      "id": "Q2",
+      "type": "conceptual",
+      "section": "middle",
+      "question": "Explain why sending a cryptographic hash along with a message does not guarantee the message's integrity, and how a MAC fixes this.",
+      "reference_answer": "If Alice sends M together with H(M), an attacker (David) who can modify traffic can replace the message with M' and also replace the hash with H(M'); Bob recomputes the hash, it matches, and he accepts the tampered message (man-in-the-middle). This works because hashes are unkeyed: there is no secret input, so anyone can compute a hash of any value. A MAC fixes this by mixing in a secret key shared by Alice and Bob: Alice sends M and T = MAC(K, M); Bob recomputes MAC(K, M) and checks it matches T. A secure MAC is existentially unforgeable, so without K David cannot produce a valid tag for M', so tampering is detected.",
+      "source_pages": [151, 153, 154, 158, 160],
+      "acceptable_pages": [151, 152, 153, 154, 155, 157, 158, 159, 160],
+      "slide_quotes": {
+        "151": "Threat model: David can modify the message and the hash • No integrity!",
+        "153": "Main issue: Hashes are unkeyed functions • There is no secret key being used as input, so any attacker can compute a hash on any value",
+        "154": "A message digest created using a secret symmetric key is known as a Message Authentication Code (MAC), because it can provide assurance that the message has not been modified",
+        "158": "Bob computes MAC(K, M) and checks that it matches T • If the MACs match, Bob is confident the message has not been tampered with (integrity)",
+        "160": "A secure MAC is existentially unforgeable: without the key, an attacker cannot create a valid tag on a message"
+      },
+      "key_points": [
+        "attacker can modify both message and hash (MITM) so the check still passes",
+        "hashes are unkeyed - anyone can compute them",
+        "MAC uses a shared secret key; receiver recomputes and compares the tag",
+        "without the key the attacker cannot forge a valid tag"
+      ],
+      "scoring_notes": "Accuracy 2 needs both halves (why hash fails AND how MAC fixes it). Saying hashes fail because of collisions, or that a MAC uses a public key / encrypts the message, contradicts the slides."
+    },
+    {
+      "id": "Q3",
+      "type": "follow_up",
+      "section": "middle",
+      "follows": "Q2",
+      "question": "Why does that matter?",
+      "reference_answer": "Integrity is a core security requirement: data must be changed only in an authorized manner. With a bare hash, an active attacker on an insecure channel can tamper with a message and the receiver has no way to notice - they would trust forged data while believing it was verified. So whenever the attacker can modify traffic you need a keyed construction (a MAC such as HMAC, or a digital signature) rather than a plain hash; a plain hash is only enough if the hash value can be published over a channel the attacker cannot alter.",
+      "source_pages": [6, 151, 153, 155],
+      "acceptable_pages": [6, 8, 151, 152, 153, 154, 155, 157, 158, 160],
+      "slide_quotes": {
+        "6": "Data integrity: Assures that data (both stored and in transmitted packets) and programs are changed only in a specified and authorized manner",
+        "151": "Threat model: David can modify the message and the hash • No integrity!",
+        "153": "If the attacker can modify the hash, hashes don’t provide integrity",
+        "155": "Hashes don’t provide integrity (unless you can publish the hash securely)"
+      },
+      "key_points": [
+        "stays on the hash-vs-MAC integrity topic from Q2 (history used)",
+        "consequence: receiver accepts forged/tampered data as genuine",
+        "need a keyed MAC or signature when the attacker can modify messages"
+      ],
+      "scoring_notes": "Retrieval uses only the literal text 'Why does that matter?', so chunks will likely be off-topic; the answer must rely on history. Relevance 0 if it answers an unrelated retrieved topic or asks what 'that' refers to."
+    },
+    {
+      "id": "Q4",
+      "type": "out_of_scope",
+      "section": "n/a",
+      "question": "How does a SQL injection attack work, and how can a web developer prevent it?",
+      "reference_answer": "The file does not cover SQL injection. Correct behaviour: state that the provided slides don't cover this topic. It may then give general background, but only if clearly labelled as not from the file and with no file citation.",
+      "source_pages": [],
+      "slide_quotes": {},
+      "absence_check": "No page contains 'SQL' or 'injection' (case-insensitive).",
+      "key_points": [
+        "explicitly says the file/slides do not cover SQL injection",
+        "no citations to the slides for SQL-injection claims"
+      ],
+      "scoring_notes": "Accuracy 2 only if it says the file doesn't cover it. Any slide citation (or invented textbook chapter) attached to a SQL-injection claim: Citation grounding 0."
+    },
+    {
+      "id": "Q5",
+      "type": "direct_fact",
+      "section": "early",
+      "question": "Why are passive attacks very difficult to detect?",
+      "reference_answer": "Because a passive attack (eavesdropping or monitoring of transmissions, e.g. release of message contents or traffic analysis) does not alter the data - there is no modification for the victim to notice.",
+      "source_pages": [17],
+      "slide_quotes": {
+        "17": "Very difficult to detect – no alteration of the data"
+      },
+      "key_points": ["no alteration of the data"],
+      "scoring_notes": "Accuracy 2 needs 'the data is not altered/modified'. Confusing passive with active attacks (replay, modification, DoS, masquerade on slide 18): Accuracy 0."
+    },
+    {
+      "id": "Q6",
+      "type": "conceptual",
+      "section": "early",
+      "question": "Explain how a pseudorandom number generator can produce output that looks random even though it is deterministic, and what goes wrong when it is used improperly.",
+      "reference_answer": "A PRNG uses a little true randomness (the seed, from Seed(entropy)) to generate a lot of random-looking output with Generate(n). The output is fully deterministic given the seed, so it is never truly random; it is secure only if, to an attacker who cannot see the internal state, the output is computationally indistinguishable from true randomness (equivalently, the attacker cannot predict future output). If it is used improperly - e.g. seeded with something predictable - attackers can predict outputs: the St. Louis casino slot machines used a PRNG based on the current time, so players timed their lever pulls with a smartphone to win.",
+      "source_pages": [72, 74, 75],
+      "acceptable_pages": [66, 72, 73, 74, 75, 78],
+      "slide_quotes": {
+        "72": "PRNGs are deterministic: Output is generated according to a set algorithm • However, for an attacker who can’t see the internal state, the output is computationally indistinguishable from true randomness",
+        "74": "A PRNG cannot be truly random • The output is deterministic given the initial seed",
+        "75": "Vulnerability: Slot machines used predictable PRNGs • The PRNG output was based on the current time"
+      },
+      "key_points": [
+        "small true-random seed expanded into lots of output",
+        "deterministic given the seed / not truly random",
+        "secure = indistinguishable from random / unpredictable to an attacker without the internal state",
+        "improper use (predictable seed such as current time) lets attackers predict output - slot machine example"
+      ],
+      "scoring_notes": "Accuracy 2 needs both halves (why it looks random AND the failure mode). Claiming a PRNG is truly random contradicts slide 74."
+    },
+    {
+      "id": "Q7",
+      "type": "conceptual",
+      "section": "late",
+      "question": "Why is encrypt-then-MAC recommended over MAC-then-encrypt when combining encryption with a MAC?",
+      "reference_answer": "Encrypt-then-MAC computes Enc(K1, M) and then MACs the ciphertext; MAC-then-encrypt MACs the plaintext and encrypts M || MAC. Both are secure in theory if applied properly, but MAC-then-encrypt has a flaw: the receiver can't tell whether tampering occurred until after decrypting, so it must always decrypt attacker-supplied input, and passing attacker-chosen input through decryption can cause side-channel leaks. With encrypt-then-MAC the tag is checked first and tampered ciphertexts are rejected before decryption, so it is more robust to implementation mistakes.",
+      "source_pages": [171, 174],
+      "acceptable_pages": [169, 170, 171, 172, 174],
+      "slide_quotes": {
+        "171": "MAC-then-encrypt has a flaw: You don’t know if tampering has occurred until after decrypting • Attacker can supply arbitrary tampered input, and you always have to decrypt it • Passing attacker-chosen input through the decryption function can cause side -channel leaks • Always use encrypt-then-MACbecause it’s more robust to mistakes",
+        "174": "Always use Encrypt-then-MAC because it's more robust to mistakes"
+      },
+      "key_points": [
+        "both secure in theory if applied properly",
+        "MAC-then-encrypt must decrypt before it can detect tampering",
+        "decrypting attacker-chosen input can leak via side channels",
+        "encrypt-then-MAC is more robust to mistakes"
+      ],
+      "scoring_notes": "Saying MAC-then-encrypt is insecure in theory, or that encrypt-then-MAC is preferred because it is faster, contradicts slide 171."
+    },
+    {
+      "id": "Q8",
+      "type": "follow_up",
+      "section": "late",
+      "follows": "Q7",
+      "question": "Can you give an example?",
+      "reference_answer": "TLS 1.0 'Lucky 13': TLS 1.0 used MAC-then-encrypt, Enc(k1, M || MAC(k2, M)), with AES-CBC. An attacker guesses a plaintext byte, modifies the ciphertext accordingly and sends it; the MAC check fails either way, but the time it takes to error differs depending on whether the guess was right. By repeating this and statistically analysing response times, the attacker learns plaintext. Takeaway: the scheme was provably secure but the implementation leaked through a side channel - always encrypt-then-MAC.",
+      "source_pages": [172],
+      "acceptable_pages": [171, 172],
+      "slide_quotes": {
+        "172": "TLS 1.0 uses MAC-then-encrypt: Enc(k1, M || MAC(k2, M)) • The encryption algorithm is AES-CBC • The Lucky 13 attack abuses MAC-then-encrypt to read encrypted messages"
+      },
+      "key_points": [
+        "example is about MAC-then-encrypt vs encrypt-then-MAC (history used)",
+        "Lucky 13 / TLS 1.0 timing side channel"
+      ],
+      "scoring_notes": "Accuracy 2 = Lucky 13 described consistently with slide 172. Accuracy 1 = a correct generic example of the MtE side-channel problem that isn't Lucky 13. Relevance 0 if the example is about an unrelated retrieved topic."
+    },
+    {
+      "id": "Q9",
+      "type": "direct_fact",
+      "section": "middle",
+      "tests_extraction": true,
+      "question": "When RC4 is used as a stream cipher, how many initial output bytes should be dropped (RC4-Drop[n]) to be conservative?",
+      "reference_answer": "n = 3072 bytes. RC4's first output bytes are biased, so RC4-Drop[n] discards the first n bytes; conservatively n = 3072.",
+      "source_pages": [93],
+      "slide_quotes": {
+        "93": "RC4 Biases: It is extensively studied, not a completely secure PRNG, first part of output biased, when used as stream cipher, should use RC4-Drop[n] • Which drops first n bytes before using the output • Conservatively, set n=3072"
+      },
+      "key_points": ["3072"],
+      "scoring_notes": "Any number other than 3072 (e.g. 256, 768, 1024 from general knowledge): Accuracy 0."
+    },
+    {
+      "id": "Q10",
+      "type": "direct_fact",
+      "section": "middle",
+      "tests_extraction": true,
+      "question": "In the RSA example where p = 17 and q = 11 and e = 7, what is the private exponent d?",
+      "reference_answer": "d = 23. n = 17 × 11 = 187, ø(n) = 16 × 10 = 160, and d satisfies de ≡ 1 mod 160 with d < 160; 23 × 7 = 161 = 1 × 160 + 1, so d = 23. Private key sk = {23, 17, 11}.",
+      "source_pages": [121],
+      "slide_quotes": {
+        "121": "5. Determine d: de=1 mod 160 and d < 160 Value is d=23 since 23×7=161= 10×160+1"
+      },
+      "key_points": ["d = 23"],
+      "scoring_notes": "The slide itself contains an arithmetic typo ('161= 10×160+1' should be 1×160+1). Do not penalise repeating it; do penalise a wrong d. Correct d with wrong working (e.g. wrong ø(n)): Accuracy 1."
+    },
+    {
+      "id": "Q11",
+      "type": "direct_fact",
+      "section": "late",
+      "tests_extraction": true,
+      "question": "In the slides' Diffie-Hellman example with q = 11, alpha = 7, XA = 3 and XB = 6, what shared secret key do Alice and Bob compute?",
+      "reference_answer": "K = 9. YA = 7^3 mod 11 = 2, YB = 7^6 mod 11 = 4; Alice computes K1 = 4^3 mod 11 = 9 and Bob computes K2 = 2^6 mod 11 = 9, so K1 = K2 = 9.",
+      "source_pages": [220],
+      "slide_quotes": {
+        "220": "Alice q=11, 𝜶=7 Bob XA=3 XB=6 YA = 73 mod 11 = 2 YB = 76 mod 11 = 4 ... K1 = 43 mod 11 = 9 K2 = 26 mod 11 = 9 K1 = K2 = K"
+      },
+      "key_points": ["K = 9"],
+      "scoring_notes": "Exponents are flattened in the extracted text ('73 mod 11' = 7^3 mod 11). Reading them as literal numbers (e.g. 73 mod 11 = 7) and reaching a different K: Accuracy 0, failure labelled 'PDF extraction'. Correct K = 9 with garbled intermediate values: Accuracy 1."
+    },
+    {
+      "id": "Q12",
+      "type": "out_of_scope",
+      "section": "n/a",
+      "question": "How does a stateful firewall decide which packets to allow through?",
+      "reference_answer": "The file does not cover firewalls. Correct behaviour: state that the provided slides don't cover this topic. It may then give general background, but only if clearly labelled as not from the file and with no file citation.",
+      "source_pages": [],
+      "slide_quotes": {},
+      "absence_check": "No page contains 'firewall', 'packet filter' or 'stateful' (case-insensitive).",
+      "key_points": [
+        "explicitly says the file/slides do not cover firewalls",
+        "no citations to the slides for firewall claims"
+      ],
+      "scoring_notes": "Accuracy 2 only if it says the file doesn't cover it. Any slide citation attached to a firewall claim: Citation grounding 0."
+    }
+  ]
+}
