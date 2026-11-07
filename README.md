@@ -115,7 +115,45 @@ pragma rather than disabling the hook.
 The local hook is opt-in by nature, so it is a convenience, not the enforcement point — CI re-runs a
 secret scan over the full history on every push, and that is what gates a merge.
 
-## Measured baseline
+### 3. Install Ollama and pull the model and embedding
+
+| OS | Command |
+|---|---|
+| Linux | `curl -fsSL https://ollama.com/install.sh \| sh` |
+| macOS | `brew install ollama` |
+| Windows | Installer from [ollama.com/download](https://ollama.com/download) |
+
+```bash
+ollama pull llama3.2:3b
+```
+
+```bash
+ollama pull nomic-embed-text
+```
+
+### 4. Verify your environment
+
+Run each of these and check the result. No application code is needed.
+
+| # | Command | Expected |
+|---|---|---|
+| 1 | `uv --version` | 0.13 or newer |
+| 2 | `uv run python -V` | `Python 3.12.x` |
+| 3 | `ollama --version` | 0.40 or newer |
+| 4 | `ollama list` | `llama3.2:3b` is listed |
+| 5 | `ollama run llama3.2:3b "In one sentence: what does TLS protect?"` | A coherent sentence about TLS |
+
+**6. Confirm Ollama is bound to loopback only.** This is the one check whose command differs per OS.
+The result must show `127.0.0.1`, never `0.0.0.0` — otherwise the model is reachable from your
+network, which breaks the trust boundary in the threat model.
+
+| OS | Command |
+|---|---|
+| Linux | `ss -tln \| grep 11434` |
+| macOS | `lsof -iTCP:11434 -sTCP:LISTEN` |
+| Windows | `netstat -an \| findstr 11434` |
+
+### Measured baseline
 
 On the reference machine (15 GiB RAM, Intel Arc integrated graphics, no CUDA, CPU inference):
 
