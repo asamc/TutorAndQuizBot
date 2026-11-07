@@ -141,7 +141,7 @@ SOME_VALUE = "looks-random-but-is-not"  # pragma: allowlist secret
 The local hook is opt-in by nature, so it is a convenience, not the enforcement point — CI re-runs a
 secret scan over the full history on every push, and that is what gates a merge.
 
-### 3. Install Ollama and pull the model
+### 3. Install Ollama and pull the model and embedding
 
 | OS | Command |
 |---|---|
@@ -151,6 +151,10 @@ secret scan over the full history on every push, and that is what gates a merge.
 
 ```bash
 ollama pull llama3.2:3b
+```
+
+```bash
+ollama pull nomic-embed-text
 ```
 
 ### 4. Verify your environment
