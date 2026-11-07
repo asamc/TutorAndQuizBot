@@ -23,4 +23,13 @@ def chunk(pages: list[PageRecord], document_name: str) -> list[Chunk]:
     Expected on the real material: 10 chunks from Lecture_1_slides.pdf (11 pages,
     one empty) and 9 from Lecture_2_slides.pdf (10 pages, one empty).
     """
-    raise NotImplementedError
+    return [
+        Chunk(
+            document_name=document_name,
+            page_number=page.page_number,
+            heading=page.heading,
+            text=page.text,
+        )
+        for page in pages
+        if not page.is_empty
+    ]

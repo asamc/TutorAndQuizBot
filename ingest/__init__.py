@@ -10,7 +10,10 @@ false, and adding a new Outcome would break the contract the UI is built
 against. It gets wired once embedding and indexing exist, which are blocked on
 TUT-58.
 
-Until then the stages are used directly, which is also how they are tested.
+Until then the stages are used directly, which is also how they are tested and
+how ingest/cli.py drives them:
+
+    uv run python -m ingest.cli data/documents/Lecture_1_slides.pdf
 """
 
 from ingest.model import (

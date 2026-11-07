@@ -99,5 +99,14 @@ class Chunk:
 
     def citation(self) -> str:
         """Human-readable source reference, e.g.
-        'Lecture_1_slides.pdf, Slide 6: Integrity'."""
-        raise NotImplementedError
+        'Lecture_1_slides.pdf, Slide 6: Integrity'.
+
+        The heading is preferred because it carries the slide number the
+        student sees, and the two disagree: the decks had hidden slides, so
+        Lecture 2's PDF page 4 is 'Slide 11: OSI Security Architecture'.
+        page_number stays the PDF index and is cited only when a document has no
+        outline, which is every .txt file. See docs/ingest-pipeline.md 5.1.
+        """
+        if self.heading:
+            return f"{self.document_name}, {self.heading}"
+        return f"{self.document_name}, Page {self.page_number}"
