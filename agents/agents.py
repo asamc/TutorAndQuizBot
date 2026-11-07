@@ -34,7 +34,7 @@ import argparse
 import math
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
@@ -52,14 +52,22 @@ class Chunk:
     text: str
     source: str
     embedding: list[float]
+    first_page: int | None = None  # None for files without pages (.txt, .docx, ...)
+    last_page: int | None = None
+    # (offset in text, page number) for each page that starts inside the chunk
+    page_breaks: list[tuple[int, int]] = field(default_factory=list)
 
 
-def read_file(path: Path) -> str:
-    """Extract text from a supported file."""
+def read_file(path: Path) -> list[tuple[int | None, str]]:
+    """Extract text from a supported file as (page_number, text) entries.
+
+    PDFs give one entry per page, numbered from 1 to match slide numbers.
+    Other files give a single entry with page_number None.
+    """
     suffix = path.suffix.lower()
 
     if suffix in SUPPORTED_TEXT:
-        return path.read_text(encoding="utf-8", errors="replace")
+        return [(None, path.read_text(encoding="utf-8", errors="replace"))]
 
     if suffix == ".pdf":
         try:
@@ -67,7 +75,8 @@ def read_file(path: Path) -> str:
         except ImportError as exc:
             raise RuntimeError("PDF support requires: pip install pypdf") from exc
         reader = PdfReader(str(path))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
+        return [(number, page.extract_text() or "")
+                for number, page in enumerate(reader.pages, start=1)]
 
     if suffix == ".docx":
         try:
@@ -75,15 +84,27 @@ def read_file(path: Path) -> str:
         except ImportError as exc:
             raise RuntimeError("DOCX support requires: pip install python-docx") from exc
         document = Document(str(path))
-        return "\n".join(p.text for p in document.paragraphs)
+        return [(None, "\n".join(p.text for p in document.paragraphs))]
 
     raise ValueError(f"Unsupported file type: {suffix or '(no extension)'}")
+
+
+def clean_text(text: str) -> str:
+    """Strip every line and drop blank lines (the text that gets chunked)."""
+    return "\n".join(line.strip() for line in text.splitlines() if line.strip())
 
 
 def split_into_chunks(text: str, size: int = CHUNK_SIZE,
                       overlap: int = CHUNK_OVERLAP) -> list[str]:
     """Split text into overlapping chunks, preferring paragraph boundaries."""
-    text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
+    return [piece for _, piece in split_with_offsets(text, size, overlap)]
+
+
+def split_with_offsets(text: str, size: int = CHUNK_SIZE,
+                       overlap: int = CHUNK_OVERLAP) -> list[tuple[int, str]]:
+    """Same chunks as split_into_chunks, each paired with the offset where it
+    starts in clean_text(text)."""
+    text = clean_text(text)
     if not text:
         return []
 
@@ -96,14 +117,67 @@ def split_into_chunks(text: str, size: int = CHUNK_SIZE,
             if boundary > start:
                 end = boundary
 
-        piece = text[start:end].strip()
+        raw = text[start:end]
+        piece = raw.strip()
         if piece:
-            chunks.append(piece)
+            chunks.append((start + len(raw) - len(raw.lstrip()), piece))
         if end >= len(text):
             break
         start = max(end - overlap, start + 1)
 
     return chunks
+
+
+def page_starts(pages: list[tuple[int | None, str]]) -> list[tuple[int, int]]:
+    """(offset, page_number) for where each page starts in the cleaned, joined
+    text. Empty for files without page numbers.
+
+    clean_text("\\n".join(pages)) equals the cleaned non-empty pages joined
+    with "\\n", so the offsets can be counted page by page.
+    """
+    starts = []
+    offset = 0
+    for page_number, text in pages:
+        cleaned = clean_text(text)
+        if page_number is None or not cleaned:
+            continue
+        starts.append((offset, page_number))
+        offset += len(cleaned) + 1
+    return starts
+
+
+def set_pages(chunk: Chunk, offset: int, starts: list[tuple[int, int]]) -> None:
+    """Set the chunk's page range and the pages that begin inside it, given
+    where the chunk starts (offset) and where each page starts."""
+    end = offset + len(chunk.text)
+    covered = [(start, number) for start, number in starts if start < end]
+    if not covered:
+        return  # file without page numbers
+    chunk.first_page = [number for start, number in covered if start <= offset][-1]
+    chunk.page_breaks = [(start - offset, number) for start, number in covered if start > offset]
+    chunk.last_page = chunk.page_breaks[-1][1] if chunk.page_breaks else chunk.first_page
+
+
+def with_page_markers(chunk: Chunk) -> str:
+    """Chunk text with a "--- Page N ---" line at the top and at each page
+    boundary. Only used in the prompt; embeddings use the plain text."""
+    if chunk.first_page is None:
+        return chunk.text
+    parts = [f"--- Page {chunk.first_page} ---"]
+    previous = 0
+    for at, number in chunk.page_breaks:
+        parts += [chunk.text[previous:at].rstrip("\n"), f"--- Page {number} ---"]
+        previous = at
+    parts.append(chunk.text[previous:])
+    return "\n".join(parts)
+
+
+def page_label(chunk: Chunk) -> str:
+    if chunk.first_page is None:
+        return "no page numbers"
+    if chunk.first_page == chunk.last_page:
+        return f"Page {chunk.first_page}"
+    return f"Pages {chunk.first_page}-{chunk.last_page}"
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -140,21 +214,23 @@ class KnowledgeBase:
                 continue
 
             try:
-                text = read_file(path)
-                pieces = split_into_chunks(text)
+                pages = read_file(path)
+                text = "\n".join(page_text for _, page_text in pages)
+                pieces = split_with_offsets(text)
                 if not pieces:
                     print(f"[skip] No extractable text: {path}")
                     continue
 
                 print(f"[index] Embedding {len(pieces)} chunk(s) from {path.name}...")
-                vectors = self._embed(pieces)
+                vectors = self._embed([piece for _, piece in pieces])
                 if len(vectors) != len(pieces):
                     raise RuntimeError("Ollama returned an unexpected number of embeddings.")
 
-                self.chunks.extend(
-                    Chunk(piece, path.name, vector)
-                    for piece, vector in zip(pieces, vectors)
-                )
+                starts = page_starts(pages)
+                for (offset, piece), vector in zip(pieces, vectors):
+                    chunk = Chunk(piece, path.name, vector)
+                    set_pages(chunk, offset, starts)
+                    self.chunks.append(chunk)
                 self.files.append(resolved)
                 print(f"[ok] Added {path.name}")
                 added_any = True
@@ -190,16 +266,19 @@ class StudyBot:
         matches = self.knowledge.retrieve(question, self.top_k)
         if matches:
             context = "\n\n".join(
-                f"[Source: {chunk.source} | Retrieved passage {i}]\n{chunk.text}"
-                for i, chunk in enumerate(matches, start=1)
+                f"[Source: {chunk.source} | {page_label(chunk)}]\n{with_page_markers(chunk)}"
+                for chunk in matches
             )
         else:
             context = "(No relevant document passages were found.)"
 
         user_message = (
             "Use the following retrieved files as your primary source. "
-            "Distinguish any general background knowledge from information found in the files."
-            "Give a citation(s) for your answer(s) of the form (filename): Pg (page or slide number).\n\n"
+            "Distinguish any general background knowledge from information found in the files. "
+            "Cite your sources as (filename, Page N), where N is the nearest "
+            "\"--- Page N ---\" marker above the information you used. Never guess a page "
+            "number. If the passage label says \"no page numbers\", cite it as "
+            "(filename, no page number available).\n\n"
             f"FILES:\n{context}\n\n"
             f"USER REQUEST:\n{question}"
         )

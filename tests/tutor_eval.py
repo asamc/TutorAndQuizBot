@@ -3,9 +3,10 @@
 Repeatable evaluation harness for TutorBot (agents/agents.py).
 
 Drives StudyBot directly via KnowledgeBase + build_bots instead of the
-interactive loop. agents.py is NOT modified: KnowledgeBase.retrieve and
-ollama.chat are wrapped at runtime so each turn's retrieval and token usage
-can be logged.
+interactive loop. KnowledgeBase.retrieve and ollama.chat are wrapped at
+runtime (agents.py itself is not patched on disk) so each turn's retrieval
+and token usage can be logged. Page ranges come from each chunk's
+first_page/last_page fields.
 
 Usage (from the repo root):
     uv run python tests/tutor_eval.py
@@ -29,7 +30,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "agents"))
 
 import ollama  # noqa: E402
-from pypdf import PdfReader  # noqa: E402
 
 import agents  # noqa: E402  (agents/agents.py)
 from agents import KnowledgeBase, build_bots  # noqa: E402
@@ -49,55 +49,20 @@ for stream in (sys.stdout, sys.stderr):
 
 
 # --------------------------------------------------------------------------
-# Chunk -> true page mapping
+# Chunk -> page range (from the chunk's own first_page/last_page fields)
 # --------------------------------------------------------------------------
-class PageMapper:
-    """Map a chunk produced by agents.split_into_chunks back to PDF page(s).
-
-    agents.read_file joins page texts with "\\n" and split_into_chunks then
-    strips every line and drops blank ones before slicing. We rebuild that same
-    normalized text, remembering which page each character came from, and
-    locate each chunk in it by exact text match.
-    """
-
-    def __init__(self, pdf_path: Path):
-        reader = PdfReader(str(pdf_path))
-        self.num_pages = len(reader.pages)
-        lines: list[str] = []
-        line_pages: list[int] = []
-        for page_no, page in enumerate(reader.pages, start=1):
-            for line in (page.extract_text() or "").splitlines():
-                if line.strip():
-                    lines.append(line.strip())
-                    line_pages.append(page_no)
-
-        self.text = "\n".join(lines)
-        # page number for every character (newline separators inherit the
-        # page of the line they follow)
-        self.char_pages: list[int] = []
-        for line, page_no in zip(lines, line_pages):
-            self.char_pages.extend([page_no] * (len(line) + 1))
-        self.char_pages = self.char_pages[: len(self.text)]
-
-    def pages_for(self, chunk_text: str) -> dict:
-        start = self.text.find(chunk_text)
-        if start < 0:
-            return {"pages": [], "match": "not_found"}
-        second = self.text.find(chunk_text, start + 1)
-        end = start + len(chunk_text)
-        pages = sorted(set(self.char_pages[start:end]))
-        return {
-            "pages": pages,
-            "match": "ambiguous" if second >= 0 else "exact",
-        }
+def chunk_pages(chunk) -> list[int]:
+    """All pages a chunk covers; empty for files without page numbers."""
+    if chunk.first_page is None:
+        return []
+    return list(range(chunk.first_page, chunk.last_page + 1))
 
 
 # --------------------------------------------------------------------------
-# Instrumentation (monkeypatch; agents.py is untouched)
+# Instrumentation (runtime wrappers; agents.py is not patched on disk)
 # --------------------------------------------------------------------------
 class Recorder:
-    def __init__(self, mapper: PageMapper | None):
-        self.mapper = mapper
+    def __init__(self):
         self.turn: dict | None = None
 
     def start_turn(self) -> None:
@@ -116,13 +81,11 @@ def install_patches(recorder: Recorder) -> None:
         chunks = original_retrieve(self, query, top_k)
         if recorder.turn is not None:
             for rank, chunk in enumerate(chunks, start=1):
-                mapping = (recorder.mapper.pages_for(chunk.text)
-                           if recorder.mapper else {"pages": [], "match": "n/a"})
                 recorder.turn["retrieved"].append({
                     "rank": rank,
                     "source": chunk.source,
-                    "true_pages": mapping["pages"],
-                    "page_match": mapping["match"],
+                    "true_pages": chunk_pages(chunk),
+                    "page_label": agents.page_label(chunk),
                     "preview": chunk.text[:PREVIEW_CHARS],
                     # full text kept so citation grounding can be scored
                     "text": chunk.text,
@@ -174,6 +137,18 @@ def git_commit() -> str | None:
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
         ).strip()
+    except Exception:
+        return None
+
+
+def agents_py_dirty() -> bool | None:
+    """True if agents/agents.py has uncommitted changes (the commit hash alone
+    would not identify the code that was tested)."""
+    try:
+        out = subprocess.check_output(
+            ["git", "status", "--porcelain", "--", "agents/agents.py"], cwd=REPO_ROOT, text=True
+        )
+        return bool(out.strip())
     except Exception:
         return None
 
@@ -249,8 +224,7 @@ def main() -> int:
     print(f"Models: chat={args.model} embed={args.embedding_model} top_k={args.top_k}")
     print(f"Commit: {git_commit()}")
 
-    mapper = PageMapper(args.file)
-    recorder = Recorder(mapper)
+    recorder = Recorder()
     install_patches(recorder)
 
     print("Indexing file (once; shared by every fresh TutorBot)...")
@@ -259,9 +233,10 @@ def main() -> int:
     if not knowledge.chunks:
         print("No chunks indexed; aborting.")
         return 2
-    unmapped = sum(1 for c in knowledge.chunks if not mapper.pages_for(c.text)["pages"])
-    print(f"{len(knowledge.chunks)} chunks, {mapper.num_pages} pages, "
-          f"{unmapped} chunk(s) not mappable to a page")
+    unmapped = sum(1 for c in knowledge.chunks if c.first_page is None)
+    file_pages = max((c.last_page for c in knowledge.chunks if c.last_page), default=None)
+    print(f"{len(knowledge.chunks)} chunks, last page {file_pages}, "
+          f"{unmapped} chunk(s) without page numbers")
 
     results = []
     started = time.perf_counter()
@@ -283,12 +258,13 @@ def main() -> int:
         "meta": {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "commit": git_commit(),
+            "agents_py_uncommitted_changes": agents_py_dirty(),
             "chat_model": args.model,
             "embedding_model": args.embedding_model,
             "top_k": args.top_k,
             "runs": args.runs,
             "file": str(args.file.resolve()),
-            "file_pages": mapper.num_pages,
+            "file_pages": file_pages,
             "num_chunks": len(knowledge.chunks),
             "unmapped_chunks": unmapped,
             "gold": str(args.gold.resolve()),
