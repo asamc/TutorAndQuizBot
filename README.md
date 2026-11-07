@@ -40,7 +40,7 @@ Work is tracked in Jira: [TutorAndQuizBot board](https://alejoserubio.atlassian.
 ```
 TutorAndQuizBot/
 ├── agents/
-│   ├── quiz-bot/      # Quiz Agent: question generation, grading, feedback
+│   ├── quiz_bot/      # Quiz Agent: question generation, grading, feedback
 │   └── tutor/         # Tutor Agent: Q&A with citations
 ├── data/
 │   ├── documents/     # Ingested course files (gitignored, never committed)
@@ -63,7 +63,7 @@ TutorAndQuizBot/
 | Directory | Responsibility |
 |---|---|
 | `agents/tutor` | Retrieves context, answers questions, attaches citations |
-| `agents/quiz-bot` | Builds quizzes, checks answers, returns feedback with citations |
+| `agents/quiz_bot` | Builds quizzes, checks answers, returns feedback with citations |
 | `data/documents` | Source files as ingested; access restricted to the service account |
 | `data/index` | Vector store and embeddings; encrypted when not in use |
 | `ingest` | Converts PDF/DOCX/TXT to text, chunks it, computes SHA-256 hashes, writes to the index |
@@ -202,7 +202,30 @@ Expect slower results on a machine with fewer cores, and faster on Apple Silicon
 
 ## Status
 
-Early scaffolding. Directory layout and documentation are in place; agent, ingestion, and UI code are not yet implemented.
+Early scaffolding. Directory layout and documentation are in place; ingestion and UI code are not yet implemented.
+
+The Quiz Agent generates and grades multiple-choice questions from the user's own course documents.
+With Ollama running:
+
+```bash
+uv run python -m ui.terminal
+```
+
+The menu offers:
+
+1. **Upload a document**: give the path to a lecture PDF or TXT file (dragging the file into the
+   terminal pastes its path). It is checked in memory first (type, 50 MB cap, readable text) and
+   only then copied into `data/documents/`, which is gitignored so course material is never
+   committed. Each slide becomes one source for questions; slides under 15 words are skipped.
+2. **Take a quiz**: a random mix, a lecture topic (one per uploaded document), or a topic you type.
+   Answer each question by letter; it is graded immediately with a citation to the source slide.
+3. **List my documents**.
+
+Uploaded documents are remembered between runs. Retrieval is keyword search until the vector store
+exists, and uploads are not yet hashed or screened for injection (see `ingest/`).
+
+The terminal interface is a temporary prototype harness. The assignment rules out a CLI as the
+product UI, so the final interface will be the web UI in `ui/`.
 
 ## Team Contributions
 
