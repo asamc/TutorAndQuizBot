@@ -7,6 +7,7 @@ Edit this to add your name to the list when you join, so you show up as contribu
 - Kelly Nunez
 - Jacob Wallace
 - Alejandro Rubio
+- Elena MacCormack
 
 # TutorAndQuizBot
 
