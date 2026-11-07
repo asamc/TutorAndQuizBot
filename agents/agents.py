@@ -276,6 +276,8 @@ def main():
     print(f"Chat model: {args.model} | Embedding model: {args.embedding_model}")
     print_help()
 
+    defaultBot = "tutor"
+
     while True:
         try:
             command = input("\nYou> ").strip()
@@ -319,6 +321,7 @@ def main():
             print(f"\n{bot.name}>")
             try:
                 print(bot.ask(prompt))
+                defaultBot = "tutor"
             except Exception as exc:
                 print(f"[error] {exc}")
             continue
@@ -328,6 +331,7 @@ def main():
             print("\nQuizBot>")
             try:
                 print(quiz.ask(prompt))
+                defaultBot = "quiz"
             except Exception as exc:
                 print(f"[error] {exc}")
             continue
@@ -345,11 +349,30 @@ def main():
             continue
 
         # Treat an unprefixed line as a TutorBot question for convenience.
+        if defaultBot == "tutor":
+            print("\nTutorBot>")
+            try:
+                print(tutor.ask(command))
+            except Exception as exc:
+                print(f"[error] {exc}")
+            continue
+
+        if defaultBot == "quiz":
+            print("\nQuizBot>")
+            try:
+                print(quiz.ask(command))
+            except Exception as exc:
+                print(f"[error] {exc}")
+            continue
+
+        #failcase default to tutor
         print("\nTutorBot>")
         try:
             print(tutor.ask(command))
         except Exception as exc:
             print(f"[error] {exc}")
+
+        
 
 
 if __name__ == "__main__":
