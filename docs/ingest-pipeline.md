@@ -32,6 +32,7 @@ The documents also have a dual nature that most pipelines do not deal with:
 | `ingest/screener.py` | Injection screening to `list[Flag]` | TUT-18 |
 | `ingest/chunker.py` | One chunk per page, with citation metadata | TUT-16 |
 | `ingest/embedder.py` | Chunks to unit-norm vectors via Ollama | TUT-65 |
+| `ingest/index.py` | Faiss index plus the chunk sidecar under `data/index/` | TUT-58 |
 | `security/patterns.py` | The injection pattern list itself | TUT-18 |
 | `ingest/cli.py` | Drives the stages from the command line | — |
 
@@ -239,6 +240,9 @@ For the Round 2 report: each control, the risk it serves, where it comes from, a
 | Metadata-only logging | R2 | section 4.1 | Log grep for a known document phrase returns nothing |
 | No `raise` inside an `except` handler | R2 | 4.5 | `tests/test_leak_invariants.py` fails on any, naming file and line |
 | No broad `except` renders the exception it caught | R2 | 4.5 | Same test; a narrow catch of our own error type is allowed |
+| Index and sidecar paired by a per-write token | R2 | index.py | Swapping one file of an equal-sized index is refused, not served |
+| Index refuses a changed embedding model or prefix | — | index.py | A stored index built with other settings will not load |
+| Vectors must be unit length before indexing | — | index.py | Unnormalised input is refused rather than ranked by magnitude |
 | Fail-closed on screener error | R1 | section 3.4 | An induced screener exception yields `flagged_injection`, not success |
 | `data/` permissions and gitignore | R2 | section 4.3 | `git check-ignore` covers `data/`; no commit contains it |
 
