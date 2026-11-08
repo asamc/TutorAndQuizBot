@@ -3,19 +3,14 @@
 Design and security requirements: docs/ingest-pipeline.md
 Contract with the UI: docs/ingest-interface.md
 
-The orchestrator -- ingest_document(), the generator described in the interface
-doc -- is deliberately not implemented yet, but the reason has narrowed. The
-original blocker was that no Outcome could honestly describe a pipeline stopping
-after chunking. Two of the three pieces are now in place: INDEXING_FAILED exists
-for the case where embedding or the index write cannot complete, and
-ingest/embedder.py implements the EMBEDDING stage. What remains is the index
-itself (TUT-58), without which INDEXED is still a false claim.
+ingest_document() -- the generator described in the interface doc -- is wired as
+of TUT-58: every stage from validating to indexing now exists, so INDEXED is a
+claim the pipeline can honestly make. It lives in ingest/pipeline.py and is
+re-exported here, which is the import the interface doc implies:
 
-The embedder is written to be driven by that orchestrator: embed_chunks() is a
-generator yielding Progress and returning the vectors, so the orchestrator can
-forward progress straight to the UI with
+    from ingest import ingest_document
 
-    vectors = yield from embedder.embed_chunks(chunks)
+ingest/cli.py drives it for the command line until a UI exists.
 
 Until then the stages are used directly, which is also how they are tested and
 how ingest/cli.py drives them:
@@ -32,6 +27,7 @@ from ingest.model import (
     Result,
     Stage,
 )
+from ingest.pipeline import ingest_document, reindex_pending
 
 __all__ = [
     "Chunk",
@@ -41,4 +37,6 @@ __all__ = [
     "Progress",
     "Result",
     "Stage",
+    "ingest_document",
+    "reindex_pending",
 ]

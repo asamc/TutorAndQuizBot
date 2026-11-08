@@ -1,91 +1,134 @@
-"""Run the ingest stages from the command line.
+"""Drive the ingest pipeline from the command line.
 
-ingest_document() in the interface doc is still unwired: no Outcome can honestly
-report INDEXED while embedding and indexing are blocked on TUT-58. So this
-drives the stages directly and says where it stopped.
+This is the only front end there is: there is no UI module yet, so the CLI is
+what exercises the published contract. It calls ingest_document() -- the
+generator from docs/ingest-interface.md section 3 -- and renders the Progress
+events and the single terminal Result, which is exactly what a UI would do.
 
     uv run python -m ingest.cli data/documents/Lecture_1_slides.pdf
     uv run python -m ingest.cli --chunks notes.txt
     uv run python -m ingest.cli --list
     uv run python -m ingest.cli --verify
+    uv run python -m ingest.cli --reindex
     uv run python -m ingest.cli --delete 83e080edc119614d a641aaf772d53290
     uv run python -m ingest.cli --delete --all
 
+Embedding needs the local Ollama runtime, so an ingest run reaches the network
+stack on loopback only. Everything else here -- --list, --verify, --delete --
+works without it, which is deliberate: the questions "what do I have" and "get
+rid of this" must not depend on a model being up.
+
 Never run this under sudo. Nothing here needs root -- it writes only to
-data/documents and ~/.tutorandquizbot, both owned by the invoking user. Running
-it elevated once leaves root-owned artifacts that a later --delete cannot
-remove, which is the only way deletion ever hits a permission error.
+data/documents, data/index and ~/.tutorandquizbot, all owned by the invoking
+user. Running it elevated once leaves root-owned artifacts that a later
+--delete cannot remove, which is the only way deletion ever hits a permission
+error.
 """
 
 import argparse
 import sys
 from pathlib import Path
 
-from ingest import chunker, manifest, screener
-from ingest.model import Flag, Outcome, Stage
-from ingest.parser import ParseFailed, parse
-from ingest.validator import validate
+from ingest import manifest
+from ingest.embedder import Embedder
+from ingest.index import INDEX_DIR, ChunkIndex, IndexFailed
+from ingest.model import Outcome, Progress, Result
+from ingest.pipeline import (
+    Finding,
+    FindingKind,
+    delete_document,
+    ingest_document,
+    reindex_pending,
+    verify,
+)
 
 
-def ingest(path: Path, show_chunks: bool = False) -> bool:
-    """Run every implemented stage against one file. True if it got through."""
+SUCCESSFUL = (Outcome.INDEXED, Outcome.ALREADY_INDEXED)
+
+
+def render(event: Progress | Result) -> None:
+    """Print one item from the generator, as a UI would render it."""
+    if isinstance(event, Progress):
+        counts = ""
+        if event.total is not None:
+            counts = f" {event.current}/{event.total}"
+        print(f"  {event.stage.value:11}{counts}")
+        return
+
+    print(f"  -> {event.outcome.value}", end="")
+    if event.chunk_count is not None:
+        print(f": {event.chunk_count} chunks", end="")
+    print()
+    if event.message:
+        print(f"     {event.message}")
+    for flag in event.flagged or []:
+        where = f"page {flag.page}" if flag.page else "document"
+        # pattern and page are safe to show; the excerpt is document text and
+        # its maximum length is still an open decision -- interface doc 6.
+        print(f"     {where}: {flag.pattern}  {flag.excerpt!r}")
+
+
+def ingest_path(
+    path: Path,
+    show_chunks: bool = False,
+    *,
+    embedder: Embedder | None = None,
+    index_dir: Path | None = None,
+) -> bool:
+    """Read one file, run the published pipeline, print what happened.
+
+    Named for what it does, because `ingest_document` is the entry point and
+    this is a caller of it. Note that it reads the bytes rather than handing
+    over a path: interface doc 2 puts every write under data/ inside ingest and
+    says the caller passes bytes and a filename only, so the CLI stands in the
+    same place the UI will.
+    """
+    index_dir = index_dir if index_dir is not None else INDEX_DIR
     data = path.read_bytes()
     print(path.name)
 
-    rejection = validate(data, path.name)
-    if rejection:
-        print(f"  {Stage.VALIDATING.value:11} {rejection.value}")
-        return False
-    print(f"  {Stage.VALIDATING.value:11} ok, {len(data):,} bytes")
+    outcome = None
+    for event in ingest_document(
+        data, path.name, embedder=embedder, index_dir=index_dir
+    ):
+        render(event)
+        if isinstance(event, Result):
+            outcome = event.outcome
 
-    # Hashed before parsing, so the digest covers the bytes as received.
-    doc_id = manifest.document_id(data)
-    known = manifest.lookup(doc_id)
-    print(f"  {'hashing':11} {doc_id[:16]}")
-    if known:
-        print(
-            f"  -> {Outcome.ALREADY_INDEXED.value}: {known['chunk_count']} chunks, "
-            f"first ingested {known['ingested_at']}"
-        )
-        return True
+    if show_chunks and outcome in SUCCESSFUL:
+        # Read back what was actually indexed rather than reprinting what was
+        # about to be: these citations are the ones retrieval will produce.
+        for chunk in indexed_chunks(manifest.document_id(data), index_dir):
+            print(f"     {chunk.citation()}  ({len(chunk.text)} chars)")
 
-    try:
-        pages = parse(data, path.name)
-    except ParseFailed as exc:
-        print(f"  {Stage.PARSING.value:11} {Outcome.PARSE_FAILED.value}: {exc}")
-        return False
-    empty = sum(page.is_empty for page in pages)
-    print(f"  {Stage.PARSING.value:11} {len(pages)} pages, {empty} empty")
+    return outcome in SUCCESSFUL
 
-    # Fails closed: a screener that raises means flagged, not clean.
-    try:
-        flags = screener.screen(pages)
-    except Exception:
-        flags = [Flag(page=None, pattern="screener-error", excerpt=None)]
 
-    if flags:
-        print(f"  {Stage.SCREENING.value:11} {len(flags)} flagged")
-        for flag in flags:
-            where = f"page {flag.page}" if flag.page else "document"
-            print(f"              {where}: {flag.pattern}  {flag.excerpt!r}")
-        print(
-            f"  -> {Outcome.FLAGGED_INJECTION.value}: held for review, "
-            "nothing stored or indexed"
-        )
-        return False
-    print(f"  {Stage.SCREENING.value:11} clean")
+def indexed_chunks(doc_id: str, index_dir: Path | None = None) -> list:
+    """This document's indexed chunks, or [] when there is no index."""
+    index_dir = index_dir if index_dir is not None else INDEX_DIR
+    if not ChunkIndex.exists(index_dir):
+        return []
+    return ChunkIndex.load(index_dir).chunks_for(doc_id)
 
-    chunks = chunker.chunk(pages, path.name)
-    print(f"  {Stage.CHUNKING.value:11} {len(chunks)} chunks")
-    if show_chunks:
-        for chunk in chunks:
-            print(f"              {chunk.citation()}  ({len(chunk.text)} chars)")
 
-    stored = manifest.store(data, path.name)
-    manifest.record(doc_id, path.name, len(pages), len(chunks))
-    print(f"  {'stored':11} {stored}")
-    print("  -> chunked, not indexed: embedding and indexing needed")
-    return True
+def reindex(
+    *, embedder: Embedder | None = None, index_dir: Path | None = None
+) -> bool:
+    """Index every recorded document whose vectors are missing."""
+    index_dir = index_dir if index_dir is not None else INDEX_DIR
+    saw_failure = False
+    saw_work = False
+    for event in reindex_pending(embedder=embedder, index_dir=index_dir):
+        if isinstance(event, Result):
+            saw_work = True
+            print(event.document_name)
+            render(event)
+            if event.outcome not in SUCCESSFUL:
+                saw_failure = True
+    if not saw_work:
+        print("every recorded document already has vectors in the index")
+    return not saw_failure
 
 
 def show_manifest() -> None:
@@ -102,26 +145,45 @@ def show_manifest() -> None:
         )
 
 
-def verify_stored() -> bool:
-    """Re-hash every stored document against its manifest entry. TUT-23."""
-    known = manifest.entries()
-    if not known:
+def render_finding(finding: Finding) -> None:
+    """One verify finding as a line of terminal output."""
+    name = finding.document_name or (finding.doc_id or "")[:16]
+    labels = {
+        FindingKind.OK: f"  ok        {name}  {finding.indexed_chunks} chunks indexed",
+        FindingKind.MISSING_BYTES: (
+            f"  missing   {name} ({(finding.doc_id or '')[:16]}) -- no stored bytes"
+        ),
+        FindingKind.HASH_MISMATCH: (
+            f"  MISMATCH  {name} ({(finding.doc_id or '')[:16]}) -- bytes changed "
+            "since ingest"
+        ),
+        FindingKind.UNINDEXED: (
+            f"  unindexed {name} ({(finding.doc_id or '')[:16]}) -- run --reindex"
+        ),
+        FindingKind.COUNT_MISMATCH: (
+            f"  COUNT     {name} ({(finding.doc_id or '')[:16]}) -- manifest says "
+            f"{finding.recorded_chunks} chunks, index holds {finding.indexed_chunks}"
+        ),
+        FindingKind.ORPHAN: (
+            f"  ORPHAN    {(finding.doc_id or '')[:16]} -- {finding.indexed_chunks} "
+            "vectors with no manifest entry; retrieval can still answer from them"
+        ),
+        FindingKind.INDEX_UNREADABLE: f"  INDEX     unreadable -- {finding.detail}",
+        FindingKind.MANIFEST_UNREADABLE: f"  MANIFEST  unreadable -- {finding.detail}",
+    }
+    print(labels[finding.kind])
+
+
+def verify_stored(*, index_dir: Path | None = None) -> bool:
+    """Print every verify finding. True when nothing is wrong."""
+    index_dir = index_dir if index_dir is not None else INDEX_DIR
+    findings = verify(index_dir=index_dir)
+    if not findings:
         print("nothing to verify")
         return True
-
-    all_ok = True
-    for doc_id, entry in sorted(known.items()):
-        found = manifest.stored_path(doc_id)
-        if found is None:
-            print(f"  missing   {entry['document_name']} ({doc_id[:16]})")
-            all_ok = False
-            continue
-        if manifest.verify(doc_id, found.read_bytes()):
-            print(f"  ok        {entry['document_name']}")
-        else:
-            print(f"  MISMATCH  {entry['document_name']} ({doc_id[:16]})")
-            all_ok = False
-    return all_ok
+    for finding in findings:
+        render_finding(finding)
+    return all(finding.ok for finding in findings)
 
 
 def resolve(prefix: str, known: dict) -> str:
@@ -143,13 +205,20 @@ def resolve(prefix: str, known: dict) -> str:
     return matches[0]
 
 
-def delete_documents(prefixes: list[str], every: bool, assume_yes: bool) -> bool:
+def delete_documents(
+    prefixes: list[str],
+    every: bool,
+    assume_yes: bool,
+    *,
+    index_dir: Path | None = None,
+) -> bool:
     """Delete documents by id prefix, or every recorded one. True on success.
 
     Only ever touches files the manifest points at, so documents sitting in
     data/documents under their original names -- the lecture decks -- are not
     reachable from here even with --all.
     """
+    index_dir = index_dir if index_dir is not None else INDEX_DIR
     known = manifest.entries()
     if not known:
         print(f"no documents recorded in {manifest.MANIFEST_PATH}")
@@ -184,7 +253,7 @@ def delete_documents(prefixes: list[str], every: bool, assume_yes: bool) -> bool
     for doc_id in targets:
         name = known[doc_id]["document_name"]
         try:
-            entry_removed, removed = manifest.delete(doc_id)
+            removal = delete_document(doc_id, index_dir=index_dir)
         except PermissionError as exc:
             print(f"  {'denied':11} {exc.filename or name}")
             print(
@@ -193,8 +262,24 @@ def delete_documents(prefixes: list[str], every: bool, assume_yes: bool) -> bool
                 '    chown -R "$(id -un)" data/documents ~/.tutorandquizbot'
             )
             return False
-        print(f"  {'manifest':11} {'removed' if entry_removed else 'absent'}  {name}")
-        print(f"  {'file':11} {('removed  ' + str(removed)) if removed else 'absent'}")
+        except IndexFailed as exc:
+            # Refusing beats deleting half the state: dropping the entry while
+            # the vectors stay would leave an orphan nothing can name.
+            print(f"  {'index':11} {exc}")
+            print("  refusing to delete while the index cannot be updated to match")
+            return False
+
+        print(
+            f"  {'index':11} {removal.vectors_removed} vector(s) removed  {name}"
+        )
+        print(
+            f"  {'manifest':11} {'removed' if removal.entry_removed else 'absent'}"
+            f"  {name}"
+        )
+        print(
+            f"  {'file':11} "
+            f"{('removed  ' + str(removal.file_removed)) if removal.file_removed else 'absent'}"
+        )
         deleted += 1
 
     print(f"  -> {deleted} document(s) deleted")
@@ -206,7 +291,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("paths", nargs="*", type=Path, help="PDF or TXT files to ingest")
     ap.add_argument("--chunks", action="store_true", help="print each chunk's citation")
     ap.add_argument("--list", action="store_true", help="show the manifest")
-    ap.add_argument("--verify", action="store_true", help="re-hash stored documents")
+    ap.add_argument(
+        "--verify",
+        action="store_true",
+        help="re-hash stored documents and cross-check them against the index",
+    )
+    ap.add_argument(
+        "--reindex",
+        action="store_true",
+        help="index any recorded document whose vectors are missing",
+    )
     ap.add_argument(
         "--delete",
         nargs="*",
@@ -224,6 +318,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.verify:
         return 0 if verify_stored() else 1
+    if args.reindex:
+        return 0 if reindex() else 1
     if args.delete is not None:
         if args.all and args.delete:
             ap.error("--delete takes ids or --all, not both")
@@ -233,7 +329,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.all:
         ap.error("--all only makes sense with --delete")
     if not args.paths:
-        ap.error("give at least one file, or --list / --verify / --delete")
+        ap.error(
+            "give at least one file, or --list / --verify / --reindex / --delete"
+        )
 
     ok = True
     for path in args.paths:
@@ -241,7 +339,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{path}: not a file")
             ok = False
             continue
-        ok = ingest(path, args.chunks) and ok
+        ok = ingest_path(path, args.chunks) and ok
     return 0 if ok else 1
 
 

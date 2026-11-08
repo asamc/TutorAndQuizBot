@@ -314,6 +314,25 @@ class ChunkIndex:
     def has_document(self, doc_id: str) -> bool:
         return any(record["doc_id"] == doc_id for record in self.records.values())
 
+    def chunks_for(self, doc_id: str) -> list[Chunk]:
+        """One document's indexed chunks, in vector id order.
+
+        Returns Chunk objects rather than raw records so callers get
+        Chunk.citation() instead of reimplementing it. The CLI did reimplement
+        it for one print statement, which put two copies of the citation format
+        in the tree -- on the one output a marker reads most closely.
+        """
+        return [
+            Chunk(
+                document_name=record["document_name"],
+                page_number=record["page_number"],
+                heading=record["heading"],
+                text=record["text"],
+            )
+            for _, record in sorted(self.records.items())
+            if record["doc_id"] == doc_id
+        ]
+
     def documents(self) -> dict[str, int]:
         """Chunk count per indexed document id."""
         counts: dict[str, int] = {}

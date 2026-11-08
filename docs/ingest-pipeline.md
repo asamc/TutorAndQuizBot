@@ -33,6 +33,7 @@ The documents also have a dual nature that most pipelines do not deal with:
 | `ingest/chunker.py` | One chunk per page, with citation metadata | TUT-16 |
 | `ingest/embedder.py` | Chunks to unit-norm vectors via Ollama | TUT-65 |
 | `ingest/index.py` | Faiss index plus the chunk sidecar under `data/index/` | TUT-58 |
+| `ingest/pipeline.py` | `ingest_document()`, delete, verify, reindex | TUT-58 |
 | `security/patterns.py` | The injection pattern list itself | TUT-18 |
 | `ingest/cli.py` | Drives the stages from the command line | — |
 
@@ -40,18 +41,21 @@ Every module in the table is implemented. The pattern list belongs in `security/
 
 **`model.py` is the keystone.** The screener and the chunker both read `PageRecord`, so its shape decides what they can do. A `PageRecord` that loses the page number cannot support citations or page-located flags. Settle it first; it is the most expensive thing here to change later.
 
-**There is deliberately no orchestrator yet.** No `Outcome` in the published contract can honestly describe a pipeline that stops after chunking — `indexed` would be false, and inventing a new outcome would break the contract the UI is being built against. Wire the generator when embedding and indexing exist.
+**`ingest/pipeline.py` is the orchestrator**, and `ingest_document()` in it is the entry point the interface doc publishes. Every stage now exists, so `indexed` is a claim the pipeline can honestly make. It owns the whole document lifecycle — `ingest_document()`, `delete_document()`, `verify()` and `reindex_pending()`.
 
-Until then `ingest/cli.py` drives the stages in order and reports where it stopped, which is how the pipeline is exercised before the UI exists:
+`ingest/cli.py` is a *caller* of it, not a second implementation. Three jobs: read bytes off disk, drive the generator, render each `Progress` and the one `Result` as text. That is deliberately the same job a Streamlit page will do, which means the contract is exercised by a real consumer before the UI exists:
 
 ```
 uv run python -m ingest.cli data/documents/Lecture_1_slides.pdf   # ingest
 uv run python -m ingest.cli --chunks notes.txt                    # + citations
 uv run python -m ingest.cli --list                                # the manifest
-uv run python -m ingest.cli --verify                              # re-hash stored docs
+uv run python -m ingest.cli --verify                              # hash + index check
+uv run python -m ingest.cli --reindex                             # repair missing vectors
 ```
 
-It prints the real `Outcome` value for every state that is reachable today — `rejected_*`, `parse_failed`, `flagged_injection`, `already_indexed` — and for a clean document says `chunked, not indexed` rather than claiming an outcome the pipeline cannot deliver. When TUT-58 lands, `ingest_document()` wraps the same calls and that last line becomes `indexed`.
+Note that the CLI reads the bytes rather than handing over a path: interface doc 2 puts every write under `data/` inside ingest and has the caller pass bytes and a filename only, so the CLI stands where the UI will.
+
+**Correctness rules belong below the front end, not in it.** Deletion ordering is the example that matters: vectors are purged and made durable *before* the manifest entry is dropped, because a crash the other way round leaves vectors retrieval still answers from — content the user asked to delete — while a crash this way leaves an entry `verify()` reports and `--reindex` repairs. That rule lived in `cli.py` briefly, which would have required the first UI delete button to rediscover it.
 
 ## 3. Stage Order Is a Security Property
 

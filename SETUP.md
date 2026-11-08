@@ -169,9 +169,15 @@ network, which breaks the trust boundary in the threat model.
 
 ## 5. Running the ingest pipeline
 
-Stages run in order: validate → hash → parse → screen → chunk → store → record. A flagged
-document stops at screening and nothing is stored or indexed. Embedding and indexing are not
-wired yet (TUT-58). The pipeline never calls the LLM, so section 3 is not a prerequisite.
+Stages run in order: validate → hash → parse → screen → chunk → embed → index → store → record.
+A flagged document stops at screening and nothing is stored or indexed.
+
+Two things follow from that order. **Embedding needs Ollama**, so section 3 *is* a prerequisite for
+ingesting — though not for `--list`, `--verify` or `--delete`, which deliberately work without a
+model running. And **the manifest entry is written last**, as the commit point: a document that
+fails to embed or index leaves nothing behind, so retrying is a plain re-upload. `--verify` reports
+either kind of drift if it ever happens, and `--reindex` repairs an entry whose vectors are
+missing.
 
 ### Ingest one or more files
 
@@ -190,8 +196,9 @@ we cannot parse would surface later as `PARSE_FAILED` and read like a corrupt do
 |---|---|
 | `--chunks` | Print one line per chunk: document, page/slide, heading, character count. Metadata only; chunk text is never printed. |
 | `--list` | Show the manifest: 16-char document id, filename, page count, chunk count, ingest timestamp. The id prefix shown here is what `--delete` takes. |
-| `--verify` | Re-hash every stored document against its recorded SHA-256 (TUT-23). Prints `ok` / `MISMATCH` / `missing` per document, and exits 1 if anything fails. |
-| `--delete ID [ID ...]` | Remove the manifest entry **and** the stored file. Takes the id prefixes `--list` prints, or full 64-char ids. An ambiguous prefix is refused and names the candidates rather than guessing. |
+| `--verify` | Re-hash every stored document against its recorded SHA-256 (TUT-23), **and** cross-check it against the index. Prints `ok` / `MISMATCH` / `missing` / `unindexed` / `COUNT` per document, plus `ORPHAN` for vectors with no manifest entry, and exits 1 if anything fails. Needs no model. |
+| `--reindex` | Index any recorded document whose vectors are missing, reading the stored bytes back and re-checking their hash first. The repair path for entries recorded before indexing existed. |
+| `--delete ID [ID ...]` | Remove the document's **vectors, stored file and manifest entry** — in that order, so a crash never leaves content that retrieval can still answer from. Takes the id prefixes `--list` prints, or full 64-char ids. An ambiguous prefix is refused and names the candidates rather than guessing. Refuses outright if the index cannot be read, rather than deleting half the state. |
 | `--all` | With `--delete` only: every recorded document. This is "purge everything recorded", not "purge test files" — run `--list` first. |
 | `--yes` | Skip the confirmation prompt. Required when stdin is not a terminal, so CI cannot silently wipe state. |
 
