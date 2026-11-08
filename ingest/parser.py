@@ -19,10 +19,6 @@ from ingest.validator import TEXT_ENCODING, declared_suffix
 MAX_PAGES = 500
 MAX_EXTRACTED_CHARS = 2_000_000
 
-# NOT ENFORCED: no portable in-process implementation exists. Accepted risk,
-# recorded in docs/ingest-pipeline.md 4.2 and 8.
-PARSE_TIMEOUT_SECONDS = 30
-
 # .txt has no pages, so we make them: one unbounded chunk is useless for
 # retrieval. 1500 chars is ~375 tokens, well inside the 2048-token context.
 TXT_PAGE_TARGET_CHARS = 1500

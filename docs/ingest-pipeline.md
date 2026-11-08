@@ -104,7 +104,7 @@ For scale, measured on the real decks: 11 pages and 2,217 extracted characters, 
 
 #### The wall-clock bound is not implemented, deliberately
 
-`PARSE_TIMEOUT_SECONDS` remains in `parser.py` as the documented intent, and nothing enforces it. No portable in-process implementation exists: `signal.alarm` is Unix-only and `pyproject.toml` commits to Windows, and a watchdog thread cannot kill the work it watches — pypdf would keep consuming CPU and memory after the "timeout" returned. That is a control in name only, and the manifest-placement argument in 4.3 applies to it: a control that cannot do its job is worse than a recorded gap, because the Round 2 report would claim it.
+There is no wall-clock bound in `parser.py`, and no constant standing in for one either — a `PARSE_TIMEOUT_SECONDS = 30` that nothing read was removed, because it implied a control that does not exist. The gap is recorded here and in section 8 instead. No portable in-process implementation exists: `signal.alarm` is Unix-only and `pyproject.toml` commits to Windows, and a watchdog thread cannot kill the work it watches — pypdf would keep consuming CPU and memory after the "timeout" returned. That is a control in name only, and the manifest-placement argument in 4.3 applies to it: a control that cannot do its job is worse than a recorded gap, because the Round 2 report would claim it.
 
 The gap is real and the other two bounds do not cover it. A file that spins inside `PdfReader()` construction produces no pages and no characters, so neither bound ever trips. Closing it needs a subprocess, which is TUT-55's call. Until then it is an accepted risk in section 8, not a control.
 

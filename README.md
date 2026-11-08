@@ -40,7 +40,7 @@ Work is tracked in Jira: [TutorAndQuizBot board](https://alejoserubio.atlassian.
 ```
 TutorAndQuizBot/
 ├── agents/
-│   ├── quiz-bot/      # Quiz Agent: question generation, grading, feedback
+│   ├── quiz_bot/      # Quiz Agent: question generation, grading, feedback
 │   └── tutor/         # Tutor Agent: Q&A with citations
 ├── data/
 │   ├── documents/     # Ingested course files (gitignored, never committed)
@@ -64,7 +64,7 @@ TutorAndQuizBot/
 | Directory | Responsibility |
 |---|---|
 | `agents/tutor` | Retrieves context, answers questions, attaches citations |
-| `agents/quiz-bot` | Builds quizzes, checks answers, returns feedback with citations |
+| `agents/quiz_bot` | Builds quizzes, checks answers, returns feedback with citations |
 | `data/documents` | Source files as ingested; access restricted to the service account |
 | `data/index` | Vector store and embeddings; encrypted when not in use |
 | `ingest` | Converts PDF/DOCX/TXT to text, chunks it, computes SHA-256 hashes, writes to the index |
