@@ -1,6 +1,6 @@
 Fall 2026
 
-Edit this to add your name to the list when you join, so you show up as contributor
+Contributors
 
 - Asa Mcdaniel
 - Reid Layne
@@ -8,6 +8,7 @@ Edit this to add your name to the list when you join, so you show up as contribu
 - Jacob Wallace
 - Alejandro Rubio
 - Elena MacCormack
+- Michelle Nguyen
 
 # TutorAndQuizBot
 
@@ -166,11 +167,11 @@ On the reference machine (15 GiB RAM, Intel Arc integrated graphics, no CUDA, CP
 
 Expect slower results on a machine with fewer cores, and faster on Apple Silicon.
 
-## Usage (Planned)
+## Usage
 
-1. Start the UI and upload course PDFs or slides; the ingest step hashes, chunks, and indexes them.
-2. Ask a question in the Tutor tab; the answer includes citations to document and section.
-3. In the Quiz tab, choose random or topic-specific mode, answer the questions, and receive graded feedback with citations.
+1. Navigate to the root dir of the project
+2. run python -m ui.main
+3. Use the UI to ingest files and query quiz or tutor bot
 
 ## Security Notes
 
@@ -181,7 +182,7 @@ Expect slower results on a machine with fewer cores, and faster on Apple Silicon
 
 ## Status
 
-Early scaffolding. Directory layout and documentation are in place; agent, ingestion, and UI code are not yet implemented.
+Working prototype
 
 ## Team Contributions
 
