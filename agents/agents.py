@@ -134,6 +134,7 @@ class KnowledgeBase:
             try:
                 text = read_file(path)
                 pieces = split_into_chunks(text)
+
                 if not pieces:
                     print(f"[skip] No extractable text: {path}")
                     continue
