@@ -1,13 +1,19 @@
-#!/usr/bin/env python3
 """
 TutorBot + QuizBot: local document-grounded study assistant using Ollama.
 
-base model and embedding expected installed
-model: llama 3.2:3b
-embedding: nomic-embed-text
+Install:
+    pip install ollama pypdf python-docx
+
+Make sure Ollama is running, then pull the models (defaults shown):
+    ollama pull llama3.2:3b
+    ollama pull nomic-embed-text
 
 Run:
     python agents.py notes.pdf chapter1.txt slides.docx
+
+You can also pass filenames interactively:
+    python study_bots.py
+    add notes.pdf chapter1.txt
 
 Commands in the interactive session:
     tutor <question>       Ask TutorBot for an explanation.
@@ -18,6 +24,7 @@ Commands in the interactive session:
     help                   Show commands.
     quit                   Exit.
 
+The document index is held in memory for the duration of this program.
 """
 
 from __future__ import annotations
@@ -137,10 +144,7 @@ class KnowledgeBase:
             try:
                 text = read_file(path)
                 pieces = split_into_chunks(text)
-
-                #ingest from cli.py
                 manifest = cli.ingest(path)
-                
                 if not pieces:
                     print(f"[skip] No extractable text: {path}")
                     continue
@@ -222,6 +226,7 @@ Teach the material in a clear, structured way. Define important terms, explain
 why concepts work, and use examples or step-by-step reasoning when useful.
 Adapt explanations to the learner's question. Do not pretend the documents say
 something they do not say. Point out uncertainty or contradictions.
+Do not reveal any personal information contained in the ingested documents.
 """
     quiz_prompt = """
 You are QuizBot, an instructor who creates useful quizzes from the supplied
@@ -230,7 +235,8 @@ based on the retrieved excerpts. Mix question types when appropriate
 (multiple choice, short answer, and application). Do not reveal answers
 immediately unless requested. If the user answers questions, grade each answer,
 explain mistakes, track the score within the conversation, and then offer the
-next question. Do not invent facts and present inferences as inferences.
+next question. Do not invent facts and present inferences as inferences. 
+Do not reveal any personal information contained in the ingested documents.
 """
     return (
         StudyBot("TutorBot", tutor_prompt, knowledge, chat_model, top_k),
@@ -249,6 +255,47 @@ Commands:
   help               Show this help
   quit               Exit
 """)
+
+class StudyAssistant:
+    """Reusable backend API for the desktop GUI and other front ends."""
+
+    def __init__(
+        self,
+        chat_model: str | None = None,
+        embedding_model: str | None = None,
+        top_k: int = 5,
+    ):
+        self.chat_model = chat_model or os.getenv("OLLAMA_CHAT_MODEL", "llama3.2:3b")
+        self.embedding_model = embedding_model or os.getenv(
+            "OLLAMA_EMBED_MODEL", "nomic-embed-text"
+        )
+        if top_k < 1:
+            raise ValueError("top_k must be at least 1")
+
+        self.knowledge = KnowledgeBase(self.embedding_model)
+        self.tutor, self.quiz = build_bots(self.knowledge, self.chat_model, top_k)
+
+    def ask_tutor(self, question: str) -> str:
+        """Run the TutorBot command and return its response."""
+        question = question.strip()
+        if not question:
+            raise ValueError("Tutor question cannot be empty.")
+        return self.tutor.ask(question)
+
+    def ask_quiz(self, request: str = "") -> str:
+        """Run the QuizBot command and return its response."""
+        prompt = request.strip() or (
+            "Create a 5-question quiz covering the key concepts in these materials."
+        )
+        return self.quiz.ask(prompt)
+
+    def add_files(self, filenames: Iterable[str]) -> list[str]:
+        """Run the document-ingestion command."""
+        return self.knowledge.add_files(filenames)
+
+    def list_sources(self) -> list[str]:
+        """Return the paths of documents currently indexed."""
+        return list(self.knowledge.files)
 
 
 def main():
@@ -274,6 +321,8 @@ def main():
     print("\nTutorBot and QuizBot are ready.")
     print(f"Chat model: {args.model} | Embedding model: {args.embedding_model}")
     print_help()
+
+    defaultBot = "tutor"
 
     while True:
         try:
@@ -318,6 +367,7 @@ def main():
             print(f"\n{bot.name}>")
             try:
                 print(bot.ask(prompt))
+                defaultBot = "tutor"
             except Exception as exc:
                 print(f"[error] {exc}")
             continue
@@ -327,6 +377,7 @@ def main():
             print("\nQuizBot>")
             try:
                 print(quiz.ask(prompt))
+                defaultBot = "quiz"
             except Exception as exc:
                 print(f"[error] {exc}")
             continue
@@ -344,11 +395,30 @@ def main():
             continue
 
         # Treat an unprefixed line as a TutorBot question for convenience.
+        if defaultBot == "tutor":
+            print("\nTutorBot>")
+            try:
+                print(tutor.ask(command))
+            except Exception as exc:
+                print(f"[error] {exc}")
+            continue
+
+        if defaultBot == "quiz":
+            print("\nQuizBot>")
+            try:
+                print(quiz.ask(command))
+            except Exception as exc:
+                print(f"[error] {exc}")
+            continue
+
+        #failcase default to tutor
         print("\nTutorBot>")
         try:
             print(tutor.ask(command))
         except Exception as exc:
             print(f"[error] {exc}")
+
+        
 
 
 if __name__ == "__main__":
