@@ -68,7 +68,7 @@ sequenceDiagram
     User->>UI: upload course file
     UI->>Ingest: file
     Ingest->>Ingest: type/size check, parse, hash, screen
-    Ingest->>Ingest: chunk (one per page), embed
+    Ingest->>Ingest: chunk (~500 words), embed
     Ingest->>Index: chunks + embeddings + metadata
     Index-->>UI: indexed (document name, count)
     UI-->>User: confirmation
@@ -194,56 +194,12 @@ desktop session, so a second concurrently loaded model would not fit, and a 3B p
 certainly would not. The prompt profile is therefore a parameter of the single `llm/` wrapper, and
 separate adapters are ruled out for the base build.
 
-The two decisions above assume CPU inference: the reference machine has Intel Arc integrated graphics
-and no CUDA. Teammates on Apple Silicon will see faster results through Metal, with no code difference.
-
-**Vector store: `faiss-cpu`, one flat index** (decided 2026-11-07, TUT-58).
-
-Faiss was the planned option, and measuring the corpus closes the question rather than reopening it.
-The whole semester is **~250 chunks** (27 lecture decks, 275 non-empty pages), which is orders of
-magnitude below the size where an approximate index earns its complexity. So `IndexFlatIP` over
-normalised 768-dimension vectors: exact nearest-neighbour search, no training step, no recall to tune.
-
-The deciding factor is not search quality, which is exact either way, but how the index persists.
-`faiss.serialize_index()` returns a single `bytes` buffer, which is exactly the shape TUT-49 needs:
-AES-256-GCM over one blob with the index name as associated data, and no partially-written plaintext on
-disk in between. A store owning its own on-disk directory layout would have to be encrypted file by
-file, and a swapped file would be undetectable.
-
-Qdrant, Weaviate and Milvus are ruled out on the criterion TUT-58 sets for itself: each runs as a server
-with a listening socket. That contradicts "fully locally with no network listener", puts a second
-process inside the trust boundary of section 4, and leaves persistence outside our control precisely
-where R2 needs it inside.
-
-Chunk text and citation metadata do **not** live in the Faiss index, which stores vectors only. They go
-in a sidecar keyed by vector id under `data/index/`, covered by the same TUT-49 wrapper.
-
-**Embedding model: `nomic-embed-text` via Ollama** (decided 2026-11-07, TUT-65).
-
-This had no ticket and two contradictory answers in the repo: README.md tells everyone to
-`ollama pull nomic-embed-text`, while the `ml` extra in `pyproject.toml` declares
-`sentence-transformers` and `torch`. Either path works; carrying both is what does not.
-
-Ollama wins for the same reason TUT-56 chose it as the runtime: it is already installed, loopback-only
-by default, and the `ollama` client is a default dependency rather than part of the 2–3 GB `ml` extra.
-`nomic-embed-text` is 274 MB against `sentence-transformers` plus `torch` at 2–3 GB, and it reuses a
-runtime the project already depends on instead of adding a second inference stack with its own model
-cache for R2 to account for.
-
-Measured on the reference machine: **768 dimensions, 2048-token context, ~13.2 chunks/s** on CPU, steady
-from 10 to 100 chunks per call. The whole semester therefore embeds in **about 20 seconds**, which
-confirms the interface doc's expectation that no stage is slow enough to need a progress bar for its own
-sake.
-
-The 2048-token context also settles `TXT_PAGE_TARGET_CHARS` in the ingest pipeline: 1500 characters is
-roughly 375 tokens, so that guess stands with ~5.5× headroom and does not need to change.
-
-Consequence for the `ml` extra: `sentence-transformers` and `torch` are no longer needed and should come
-out, leaving `faiss-cpu` and `streamlit`. That is a dependency change, tracked on TUT-66 rather than
-done here.
+Both decisions assume CPU inference: the reference machine has Intel Arc integrated graphics and no
+CUDA. Teammates on Apple Silicon will see faster results through Metal, with no code difference.
 
 ### 5.2 Still open
 
 - **Process layout.** The system will run as several processes, but the split and the communication method depend on the team's operating systems (Windows, Linux, macOS).
+- **Vector store.** Faiss is the planned option. The encrypted-at-rest approach for the bonus build depends on this choice.
 - **Citation granularity.** Page or slide numbers are likely sufficient, but PDF section detection may need work.
 - **Ingest isolation.** Whether parsing runs in a separate process depends on the process layout decision and on whether malicious file ingestion becomes R4.
