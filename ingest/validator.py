@@ -1,4 +1,4 @@
-"""Accept or reject an uploaded file. TUT-14.
+"""Accept or reject an uploaded file.
 
 First gate in the pipeline, ahead of the parser: pypdf consumes hostile input
 and should not see unchecked bytes. Runs in memory, before anything is written
@@ -9,36 +9,29 @@ from pathlib import PurePosixPath
 
 from ingest.model import Outcome
 
-# Enforced here even though Streamlit also caps uploads: the UI is not a trust
-# boundary, and CLI ingestion bypasses it entirely.
+# Enforced here too: the UI is not a trust boundary, and the CLI bypasses it.
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB, matching docs/ingest-interface.md
 
 ACCEPTED_SUFFIXES = (".pdf", ".txt")
 
-# Checked against the actual bytes rather than trusting the extension. A .txt
-# file has no signature, so it is validated by decoding.
+# Checked against the bytes, not the extension. .txt has no signature, so it
+# is validated by decoding instead.
 PDF_MAGIC = b"%PDF-"
 
-# Encoding a .txt upload must decode under. Shared with parser.py so a file
-# cannot pass this gate and then fail extraction. utf-8-sig eats the BOM that
-# Notepad writes. Rejects cp1252 -- the fail-closed direction, and the one false
-# rejection to expect; a fallback would make the check vacuous.
+# Shared with parser.py so a file cannot pass this gate then fail extraction.
+# utf-8-sig eats Notepad's BOM. cp1252 is rejected: the fail-closed direction,
+# and the one false rejection to expect. A fallback would make this vacuous.
 TEXT_ENCODING = "utf-8-sig"
 
 
 def validate(data: bytes, filename: str) -> Outcome | None:
     """Return the rejection Outcome, or None if the file is acceptable.
 
-    Checks, in order:
-      - size against MAX_UPLOAD_BYTES              -> REJECTED_SIZE
-      - suffix against ACCEPTED_SUFFIXES           -> REJECTED_TYPE
-      - content signature against the suffix       -> REJECTED_CONTENT_MISMATCH
+    Size, then suffix, then content signature against that suffix. The content
+    check is the one that matters: a .pdf whose bytes are not a PDF must be
+    rejected, not handed to pypdf.
 
-    The content check is the one that matters: a .pdf whose bytes are not a PDF
-    must be rejected, not handed to pypdf.
-
-    Never log `data` or any slice of it. Rejections are logged as metadata only:
-    document id, declared suffix, reason. Pipeline doc 4.5.
+    Never log `data` or a slice of it -- id, suffix and reason only.
     """
     # Size first, so an oversized file is rejected on a len() rather than on a
     # 50 MB decode -- and reports the cap rather than its extension.
@@ -60,16 +53,14 @@ def declared_suffix(filename: str) -> str:
 
     Public because parser.py dispatches on the same answer. `filename` is user
     input and is never used to build a path here -- path safety belongs to
-    manifest.storage_name (pipeline doc 4.1), so '../../etc/passwd.pdf' is a
-    valid *type*.
+    manifest.storage_name -- so '../../etc/passwd.pdf' is a valid *type*.
 
-    PurePosixPath, not Path, so a Windows-style path gives the same answer on
-    every teammate's OS. Deliberately strict, since each of these is how an
-    extension check gets bypassed:
+    PurePosixPath, not Path, so a Windows-style path answers the same on every
+    OS. Strict, because each of these is how an extension check gets bypassed:
 
       - 'notes.PDF'          -> '.pdf', accepted; case is not a signal
       - 'notes.pdf.exe'      -> '.exe', rejected; only the final suffix counts
-      - 'notes.pdf\\x00.exe' -> '.exe', rejected; no truncation at the null
+      - 'notes.pdf\x00.exe' -> '.exe', rejected; no truncation at the null
       - 'notes', '.pdf'      -> '',     rejected; undeterminable means reject
     """
     # Windows discards trailing dots and spaces, so strip them rather than

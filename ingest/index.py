@@ -1,56 +1,26 @@
-"""The vector index and its chunk sidecar. TUT-58, the INDEXING stage.
+"""The vector index and its chunk sidecar under data/index/.
 
-One flat faiss index over unit-norm 768-dimension vectors, decided in
-architecture doc 5.1: the whole semester is ~250 chunks, orders of magnitude
-below where an approximate index earns its complexity, so `IndexFlatIP` gives
-exact nearest-neighbour search with no training step and no recall to tune.
+One flat faiss index over unit-norm 768-dimension vectors. The whole semester is
+~250 chunks, far below where an approximate index is worth its complexity, so
+IndexFlatIP gives exact search with no training step.
 
-Four structural decisions, each with a failure mode behind it:
+Four structural points:
 
-**Vectors carry explicit ids, through `IndexIDMap2`.** A bare `IndexFlatIP`
-addresses vectors by position and `remove_ids` compacts by swapping the last
-vector into the hole -- so deleting one document silently renumbers every vector
-after it, and a sidecar keyed by position then describes the wrong chunks. The
-CLI already exposes `--delete`, so that is reachable today, not hypothetical.
-Ids are allocated from a monotonic counter and **never reused**, so a stale
-reference resolves to nothing rather than to a different document's text.
+- Vectors carry explicit ids, through IndexIDMap2. A bare IndexFlatIP addresses
+  by position and compacts on removal, so deleting one document would renumber
+  the rest and the sidecar would then describe the wrong chunks. Ids come from a
+  counter and are never reused.
+- Chunk text and citations live in the sidecar, not in faiss, keyed by vector
+  id. The sidecar also owns the document-to-vector mapping; the manifest stays
+  the integrity artifact outside data/ and holds no index internals.
+- Each write stamps a random `generation` into both files and load refuses a
+  pair that disagrees. Counting vectors is not enough: two indexes with the same
+  chunk count can have their vector files swapped, and the result loads happily
+  while citing the wrong document at similarity 1.0.
+- All persistence goes through _read_blob/_write_blob, so encryption at rest
+  becomes a wrapper rather than a rewrite.
 
-**Chunk text and citations live in the sidecar, not in faiss**, which stores
-vectors only. The sidecar is keyed by vector id and holds everything
-`Chunk.citation()` needs, so retrieval can render a citation without re-reading
-the document.
-
-**The sidecar owns the document-to-vector mapping, not the manifest.** The
-manifest is the integrity artifact that deliberately lives outside `data/`
-(ingest-pipeline 4.3), and growing index internals into it would put the
-detector inside the blast radius of the thing it detects. The cost is that
-deletion has to load the index, which at this corpus size is nothing.
-
-**Reads and writes funnel through `_read_blob`/`_write_blob`.** TUT-49's
-encryption at rest is the bonus build: `faiss.serialize_index()` hands back one
-buffer, which is exactly the shape AES-256-GCM wants, and the sidecar is already
-a single JSON document. Keeping all persistence in two functions means that
-becomes a wrapper rather than a rewrite.
-
-The two files have to agree, and nothing in faiss or JSON enforces that. Each
-write stamps a fresh random `generation` token into both, and load refuses a
-pair that disagrees -- so a torn write or a swapped file is a refusal instead of
-an index that describes chunks it does not contain.
-
-Comparing vector counts is not enough, which is worth stating because it was the
-first attempt. Two indexes holding the same number of chunks -- unremarkable
-across a set of uniform lecture decks -- can have their vector files exchanged,
-and a count check passes: the index then answers with another document's vector
-while citing this one's filename and page, at a similarity of 1.0. The token is
-what closes that, and it is why the vectors file carries a small header of its
-own rather than being a bare `faiss.serialize_index()` buffer. Architecture 5.1
-raises exactly this worry about a store owning its on-disk layout; this is the
-base-build answer, and TUT-49 can additionally bind each file to its name and
-generation as AES-GCM associated data.
-
-Note for R2: the sidecar holds document text at rest. It lives under the
-gitignored, permission-restricted `data/` tree, is written 0600 in a 0700
-directory, and is what TUT-49 encrypts.
+The sidecar holds document text at rest: 0600 in a 0700 directory, gitignored.
 """
 
 from __future__ import annotations
@@ -68,22 +38,19 @@ import numpy as np
 from ingest.embedder import EmbeddingSpec
 from ingest.model import Chunk
 
-# Every write under data/ is accounted for in one place per interface doc 2;
-# this is the index half, manifest.py is the documents half.
+# The index half of "every write under data/ lives in one place"; manifest.py
+# is the documents half.
 INDEX_DIR = Path("data/index")
 VECTORS_NAME = "vectors.faiss"
 SIDECAR_NAME = "sidecar.json"
 
-# Bumped when the sidecar layout changes in a way an older reader would
-# misinterpret. An unknown version is refused rather than guessed at.
+# Bumped when the sidecar layout changes; an unknown version is refused.
 FORMAT_VERSION = 1
 
-# A unit vector's norm after float32 rounding. Looser than the 1e-6 measured
-# off the embedder, tight enough that raw unnormalised vectors are caught.
+# Loose enough for float32 rounding, tight enough to catch raw vectors.
 NORM_TOLERANCE = 1e-3
 
-# secrets.token_hex(16). Validated on both read and write so a hand-edited or
-# truncated token is a refusal rather than a token that happens to compare equal.
+# secrets.token_hex(16), validated on read and write.
 _GENERATION = re.compile(r"[0-9a-f]{32}")
 
 MESSAGE_FAILED = "The document could not be indexed."
@@ -100,8 +67,8 @@ MESSAGE_MISMATCH = (
 class IndexFailed(Exception):
     """Index read, write or update could not complete.
 
-    Maps to Outcome.INDEXING_FAILED. Carries a fixed, display-safe message
-    written here: never a library error, never document text.
+    Becomes Outcome.INDEXING_FAILED. Carries a fixed message, never library
+    text and never document text.
     """
 
 
@@ -148,11 +115,10 @@ class ChunkIndex:
     ) -> ChunkIndex:
         """Read the index from disk, refusing anything inconsistent.
 
-        `expected_spec` is the live embedder's settings. A stored index built
-        with a different model, digest, dimension or prefix holds vectors that
-        are not comparable with freshly computed ones, and the symptom is
-        plausible-looking wrong rankings rather than an error -- so a mismatch
-        is refused here, which is the only place it can be caught.
+        `expected_spec` is the live embedder's settings. An index built with a
+        different model, dimension or prefix holds vectors that are not
+        comparable with fresh ones, and the symptom is plausible wrong rankings
+        rather than an error, so this is the only place it can be caught.
         """
         sidecar = _read_sidecar(directory)
         spec = _spec_from(sidecar.get("spec"))
@@ -204,9 +170,8 @@ class ChunkIndex:
     def add(self, doc_id: str, chunks: list[Chunk], vectors: np.ndarray) -> list[int]:
         """Index one document's chunks. Returns the ids assigned, in order.
 
-        Row i of `vectors` must be the vector for `chunks[i]`; that pairing is
-        what holds a citation to a vector and nothing downstream could detect it
-        being wrong, so it is checked rather than trusted.
+        Row i of `vectors` must belong to chunks[i]. That pairing is what holds
+        a citation to a vector, so it is checked rather than trusted.
         """
         if not doc_id:
             raise IndexFailed(MESSAGE_FAILED)
@@ -243,8 +208,8 @@ class ChunkIndex:
     def remove(self, doc_id: str) -> int:
         """Forget one document's vectors and sidecar rows. Returns the count.
 
-        The ids are not recycled. `IndexIDMap2` keeps every surviving vector's
-        id across a removal, which is the reason it is used at all.
+        Ids are not recycled. IndexIDMap2 keeps every surviving vector's id
+        across a removal, which is why it is used at all.
         """
         ids = [
             vector_id
@@ -266,11 +231,9 @@ class ChunkIndex:
     def search(self, query: np.ndarray, top_k: int = 5) -> list[Hit]:
         """The `top_k` most similar chunks, best first.
 
-        Scores are inner products of unit vectors, so they are cosine
-        similarities in [-1, 1]. faiss pads a short result with id -1, which is
-        dropped here rather than surfaced as a hit -- that happens whenever
-        top_k exceeds the number of indexed chunks, which for a fresh index with
-        one lecture in it is the normal case.
+        Scores are inner products of unit vectors, so cosine similarities in
+        [-1, 1]. faiss pads a short result with id -1; those are dropped, which
+        is the normal case whenever top_k exceeds the number of chunks.
         """
         if top_k < 1:
             raise IndexFailed(MESSAGE_FAILED)
@@ -317,10 +280,8 @@ class ChunkIndex:
     def chunks_for(self, doc_id: str) -> list[Chunk]:
         """One document's indexed chunks, in vector id order.
 
-        Returns Chunk objects rather than raw records so callers get
-        Chunk.citation() instead of reimplementing it. The CLI did reimplement
-        it for one print statement, which put two copies of the citation format
-        in the tree -- on the one output a marker reads most closely.
+        Returns Chunk objects so callers get Chunk.citation() rather than
+        reimplementing it.
         """
         return [
             Chunk(
@@ -348,12 +309,10 @@ class ChunkIndex:
     def save(self, directory: Path = INDEX_DIR) -> None:
         """Write both files, owner-only, in a 0700 directory.
 
-        Written to temporaries and moved into place, so a crash mid-write
-        cannot leave a half-written file that load() would misread. The two
-        renames are not one atomic step: if the process dies between them the
-        vector count and the sidecar disagree, which load() refuses. Failing
-        closed on a torn write is the point -- the alternative is an index that
-        describes chunks it does not hold.
+        Each goes to a temporary and is moved into place, so a crash cannot
+        leave a half-written file. The two renames are not one atomic step: if
+        the process dies between them the generation tokens disagree and load
+        refuses the pair, which is the intended outcome.
         """
         if self.index.ntotal != len(self.records):
             raise IndexFailed(MESSAGE_FAILED)
@@ -391,11 +350,10 @@ def _new_index(dim: int) -> faiss.Index:
 
 
 def _serialize(index: faiss.Index) -> bytes:
-    """The index as one buffer, which is the shape TUT-49 encrypts.
+    """The index as one buffer, ready to encrypt.
 
-    `faiss.serialize_index` returns a numpy uint8 array rather than `bytes`,
-    which architecture doc 5.1 describes loosely; the conversion belongs here
-    so callers and the encryption wrapper see plain bytes.
+    faiss.serialize_index returns a numpy uint8 array rather than bytes, so the
+    conversion belongs here.
     """
     return bytes(_guarded(lambda: faiss.serialize_index(index), MESSAGE_FAILED))
 
@@ -409,9 +367,7 @@ def _pack_vectors(generation: str, blob: bytes) -> bytes:
     """Stamp the vectors file with the generation it was written in.
 
     A bare serialized index carries nothing identifying, so a file from another
-    index -- or from an earlier write of this one -- substitutes cleanly. The
-    header is the fix: 32 hex characters and a newline, ahead of the faiss
-    buffer.
+    index substitutes cleanly. Header is 32 hex characters and a newline.
     """
     if not _GENERATION.fullmatch(generation):
         raise IndexFailed(MESSAGE_FAILED)
@@ -438,7 +394,7 @@ def _generation_from(raw: object) -> str:
 
 
 def _write_blob(path: Path, payload: bytes) -> None:
-    """One of the two persistence seams. TUT-49 wraps this."""
+    """One of the two persistence seams; encryption would wrap this."""
     temp = path.with_suffix(path.suffix + ".tmp")
     _guarded(lambda: temp.write_bytes(payload), MESSAGE_FAILED)
     os.chmod(temp, 0o600)
@@ -446,7 +402,7 @@ def _write_blob(path: Path, payload: bytes) -> None:
 
 
 def _read_blob(path: Path) -> bytes:
-    """The other persistence seam. TUT-49 wraps this."""
+    """The other persistence seam; encryption would wrap this."""
     return _guarded(lambda: path.read_bytes(), MESSAGE_UNREADABLE)
 
 
@@ -485,10 +441,9 @@ def _records_from(raw: object) -> dict[int, dict]:
 def _validated(vectors: np.ndarray, dim: int) -> np.ndarray:
     """float32, right width, finite, and unit length.
 
-    The norm check is not pedantry: IndexFlatIP computes inner products, which
-    equal cosine similarity only for unit vectors. Unnormalised input would
-    rank by magnitude as much as by direction and never raise, so this is the
-    one place that can catch it.
+    The norm check matters: IndexFlatIP computes inner products, which equal
+    cosine only for unit vectors. Unnormalised input would rank partly by
+    magnitude and never raise.
     """
     matrix = np.asarray(vectors, dtype=np.float32)
     if matrix.ndim != 2 or matrix.shape[1] != dim or matrix.shape[0] == 0:
@@ -502,14 +457,11 @@ def _validated(vectors: np.ndarray, dim: int) -> np.ndarray:
 
 
 def _guarded(call, message: str):
-    """Run `call`, converting any exception out of it into IndexFailed.
+    """Run `call`, turning any exception into IndexFailed.
 
-    Third copy of the pattern, after parser._guarded and embedder._guarded, and
-    non-obvious for the same reason: the raise happens after the except block
-    exits, because `raise X from None` leaves the original on __context__ where
-    an error reporter walking the chain prints whatever it quoted. faiss and the
-    filesystem both raise errors carrying paths. Pipeline doc 4.5, enforced by
-    tests/test_leak_invariants.py.
+    The raise happens after the except block exits: `raise X from None` only
+    hides the chained exception, which stays on __context__. faiss and the
+    filesystem both raise errors carrying paths.
     """
     failed = False
     try:

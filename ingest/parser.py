@@ -1,4 +1,4 @@
-"""Extract text from an accepted file. TUT-15.
+"""Extract text from an accepted file.
 
 One PageRecord per page: a flat string loses the page boundaries that citations
 and page-located flags need. Parses untrusted input, so it is bounded and never
@@ -13,25 +13,24 @@ from pypdf import PdfReader
 from ingest.model import PageRecord
 from ingest.validator import TEXT_ENCODING, declared_suffix
 
-# Bounds against malformed and hostile files. docs/ingest-pipeline.md 4.2.
-# The char bound is the one that matters: a size cap does not bound memory.
-# Real decks are 11 pages / 2,217 chars, so only synthetic fixtures reach these.
+# Bounds against malformed and hostile files. The char bound is the one that
+# matters: a size cap does not bound memory. Real decks are 11 pages / 2,217
+# chars, so only synthetic fixtures reach these. See ingest-pipeline.md 4.2.
 MAX_PAGES = 500
 MAX_EXTRACTED_CHARS = 2_000_000
 
-# NOT ENFORCED -- no portable in-process implementation exists, and a control in
-# name only is worse than a recorded gap. Accepted risk; pipeline doc 4.2 and 8.
-PARSE_TIMEOUT_SECONDS = 30  # unenforced; see above
+# NOT ENFORCED: no portable in-process implementation exists. Accepted risk,
+# recorded in docs/ingest-pipeline.md 4.2 and 8.
+PARSE_TIMEOUT_SECONDS = 30
 
-# .txt has no pages, so we make them -- one unbounded chunk would be useless for
-# retrieval. 1500 is a guess pending the embedding model. Pipeline doc 5.2.
+# .txt has no pages, so we make them: one unbounded chunk is useless for
+# retrieval. 1500 chars is ~375 tokens, well inside the 2048-token context.
 TXT_PAGE_TARGET_CHARS = 1500
 
 # Outline nesting is attacker-controlled; bound it. Real decks are flat.
 MAX_OUTLINE_DEPTH = 8
 
-# Fixed strings, never built from a caught exception: a pypdf error quotes the
-# bytes it choked on. Pipeline doc 4.5.
+# Fixed strings. A pypdf error quotes the bytes it choked on, so never reuse one.
 MESSAGE_UNREADABLE = "The document could not be read. It may be corrupt or incomplete."
 MESSAGE_ENCRYPTED = (
     "The document is password-protected. Remove the password and upload it again."
@@ -172,16 +171,14 @@ def _extract_headings(reader: PdfReader) -> dict[int, str]:
     """Map 1-based page number to its outline title, where the PDF has one.
 
     The decks carry one bookmark per slide holding its title, which is where
-    citations like 'Slide 6: Integrity' come from.
+    citations like 'Slide 6: Integrity' come from. Stored verbatim, including
+    the "Slide N:" prefix: the decks' slide labels do not match their PDF page
+    numbers because of hidden slides, so rebuilding the prefix from the page
+    index would cite the wrong slide, and splitting on the colon breaks on
+    titles holding a second one. See ingest-pipeline.md 5.1.
 
-    The title is stored verbatim, including its own "Slide N:" prefix: the decks'
-    slide labels do not match their PDF page numbers (hidden slides), so
-    rebuilding the prefix from the page index would cite the wrong slide, and
-    splitting on the colon breaks on titles holding a second one. Pipeline 5.1.
-
-    Headings are a nicety, so any failure returns what was collected. Tolerates
-    no outline, nested entries, and untitled ones. get_destination_page_number()
-    is 0-based; add 1.
+    Headings are a nicety, so any failure returns what was collected.
+    get_destination_page_number() is 0-based; add 1.
     """
     try:
         outline = reader.outline

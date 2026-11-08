@@ -1,34 +1,21 @@
-r"""Screen documents for instruction-like phrasing. TUT-18.
+r"""Screen documents for instruction-like phrasing.
 
 Scans PageRecords rather than flattened text, so every Flag carries a real page
-number and the UI can say *where* something was found.
+number. Three properties it has to hold:
 
-Three properties this module must hold:
+- **Detects, never sanitises.** Document text is not modified. Stripping a
+  matched phrase would corrupt course material and create false confidence at
+  once. Each normalized form below is a throwaway copy for matching only;
+  nothing downstream ever sees one.
+- **Fails closed.** If screening raises, the caller treats the document as
+  flagged, not clean. A gate that fails open is worse than no gate.
+- **Screens several views of the same page.** Measured against data/test_files:
+  letter spacing ("I g n o r e  a l l"), a U+200D inside a keyword, fullwidth
+  characters and a base64 payload each evaded all 27 patterns in raw form.
+  Widening patterns is the wrong layer, so the text is also screened normalized
+  and base64-decoded.
 
-1. It **detects, it does not sanitise.** Document text is never modified.
-   Stripping a matched phrase and indexing the result corrupts course material
-   and creates false confidence at the same time. This flags; a person decides.
-
-   Normalization below does not break this. Each normalized form is a throwaway
-   copy built for matching; PageRecord.text is never touched, and nothing
-   downstream -- chunking, embedding, citation -- ever sees a normalized form.
-
-2. It **fails closed.** If screening raises, the caller treats the document as
-   FLAGGED_INJECTION, not as clean. A gate that fails open is worse than no
-   gate, because it produces the belief that screening ran when it did not.
-
-3. It screens **several views of the same page.** A regex matches surface forms
-   of what is really a semantic property, so any transformation that preserves
-   meaning for a reader while changing the bytes defeats every pattern at once.
-   Measured against data/test_files: letter spacing ("I g n o r e  a l l"), a
-   U+200D inside a keyword, fullwidth characters and a base64 payload each
-   evaded all 27 patterns in their raw form. Widening the patterns cannot fix
-   that -- it is the wrong layer -- so the text is also screened normalized and
-   base64-decoded.
-
-Indirect injection is the more serious R1 path: the course material is the asset
-being protected, and anyone who can upload a file can attempt it. See
-docs/threat-model.md section 3.1.
+See docs/threat-model.md 3.1.
 """
 
 import base64
@@ -41,11 +28,9 @@ from ingest.model import Flag, PageRecord
 
 # Maximum characters of document text carried in Flag.excerpt.
 #
-# Open decision: TUT-18 requires the user be told what was flagged and where,
-# while TUT-54 and threat-model 4.3 say the UI never displays raw document
-# content -- and an excerpt *is* document content. Bounded at 80 for now and
-# kept as a module constant so changing it later is one line. Flag.pattern and
-# Flag.page are safe to display regardless.
+# Open decision: the user should be told what was flagged, but the UI is not
+# meant to display raw document content, and an excerpt is document content.
+# Bounded at 80 for now; pattern and page are safe to display regardless.
 EXCERPT_MAX_CHARS = 80
 
 # Reported when a rule matched only after normalization or decoding -- i.e. the
@@ -95,22 +80,17 @@ _B64_MAX_DECODED_CHARS = 20_000
 def screen(pages: list[PageRecord]) -> list[Flag]:
     """Return one Flag per (page, rule). An empty list means clean.
 
-    Patterns come from security.patterns.INJECTION_PATTERNS and are matched
-    case-insensitively. Each Flag records the rule *name*, not the document
-    text, so a Flag is safe to log once the excerpt is dropped.
+    Each Flag records the rule *name*, not document text, so it is safe to log
+    once the excerpt is dropped -- never log a Flag wholesale.
 
-    One Flag per rule per page, not per match: a rule that fires in the raw text
-    and again in a normalized view of the same page is one finding, and the raw
-    view wins so the excerpt stays faithful to the document. A rule that fires
-    *only* in a derived view also yields a NORMALIZED_EVASION or ENCODED_PAYLOAD
-    flag, because the hiding is itself the finding.
+    One Flag per rule per page, not per match. A rule firing in both the raw
+    text and a normalized view of the same page is one finding, and the raw
+    view wins so the excerpt stays faithful. A rule firing *only* in a derived
+    view also yields a normalized-evasion or encoded-payload flag, because the
+    hiding is itself the finding.
 
-    Expect frequent false positives: this course's material is about security,
-    so a lecture on prompt injection legitimately contains "ignore previous
-    instructions". Do not weaken the patterns to suppress that -- the review
-    flow is meant to absorb it.
-
-    Never log a Flag wholesale; the excerpt is document text.
+    Expect frequent false positives on correct content and do not weaken the
+    patterns to suppress them; the review flow absorbs it.
     """
     flags: list[Flag] = []
     for page in pages:

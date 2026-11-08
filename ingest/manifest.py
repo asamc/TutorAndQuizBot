@@ -1,17 +1,16 @@
-"""Document identity, integrity and storage. TUT-17, read back by TUT-23.
+"""Document identity, integrity and storage.
 
-Holds the SHA-256 of every ingested document, so later tampering with a document
-or the index is detectable rather than silently used.
+Holds the SHA-256 of every ingested document, so later tampering is detectable
+rather than silently used. Three decisions behind that:
 
-The manifest lives outside data/ by design: one stored beside the documents can
-be rewritten by anyone able to tamper with them, which makes the check theatre.
-Pipeline doc 4.3.
+- The manifest lives outside data/. One stored beside the documents could be
+  rewritten by anyone able to tamper with them, making the check theatre.
+- Storage names come from the hash, not the filename: path safety and the
+  duplicate check from one decision.
+- The bytes are hashed as received, before parsing. Hashing anything derived
+  compares against an artifact that was never on disk.
 
-Storage names come from the hash, not the user-supplied filename. That gives
-path safety and the duplicate check from one decision. Pipeline doc 4.1.
-
-Hash the bytes as received, before parsing -- hashing anything derived compares
-the integrity check against an artifact that was never on disk.
+See docs/ingest-pipeline.md 4.1 and 4.3.
 """
 
 import hashlib
@@ -61,11 +60,8 @@ def store(data: bytes, filename: str) -> Path:
 def stored_path(doc_id: str) -> Path | None:
     """The stored document for this id, or None if its bytes are not on disk.
 
-    Matched by prefix: the stored name is the digest plus the accepted suffix,
-    which the id alone does not carry.
-
-    An empty id would glob every document, so it returns None rather than an
-    arbitrary one -- this is a lookup used by deletion.
+    Matched by prefix, since the stored name is the digest plus a suffix the id
+    does not carry. An empty id returns None rather than an arbitrary match.
     """
     if not doc_id:
         return None
@@ -125,19 +121,15 @@ def delete(doc_id: str) -> tuple[bool, Path | None]:
     """Forget a document: remove its stored bytes and its manifest entry.
 
     Returns (entry_removed, path_of_removed_file). An orphan -- bytes with no
-    entry, or an entry with no bytes -- deletes the half that exists and
-    reports the other as absent, so this doubles as drift repair.
+    entry, or the reverse -- removes the half that exists, so this doubles as
+    drift repair.
 
-    The file is unlinked *before* the entry is dropped, deliberately. If this
-    dies halfway the surviving state should be the detectable one: verify() and
-    cli.verify_stored() already report an entry whose file is missing, whereas
-    bytes with no entry are an orphan nothing audits.
+    The file is unlinked before the entry is dropped, so if this dies halfway
+    the surviving state is the detectable one: verify reports an entry whose
+    file is missing, while bytes with no entry are an orphan nothing audits.
 
-    Deleting needs no elevation. unlink(2) is authorised by write+execute on
-    DOCUMENT_DIR, which store() leaves at 0o700 owned by the ingesting user;
-    the 0o600 on the file governs open(), not removal. A PermissionError here
-    means the artifacts are owned by someone else -- in practice that the
-    pipeline was once run under sudo -- and is left to the caller to report.
+    A PermissionError here means the artifacts belong to another user, in
+    practice from one run under sudo. Left to the caller to explain.
     """
     path = stored_path(doc_id)
     if path is not None:
@@ -151,7 +143,7 @@ def delete(doc_id: str) -> tuple[bool, Path | None]:
 
 
 def verify(doc_id: str, data: bytes) -> bool:
-    """True when `data` still hashes to its recorded digest. TUT-23.
+    """True when `data` still hashes to its recorded digest.
 
     Called on index load. A mismatch means the document changed since ingest:
     surface it and do not serve the affected material.

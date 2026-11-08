@@ -1,53 +1,32 @@
-r"""Injection screening patterns.
+r"""Injection screening patterns, as (name, regex) pairs.
 
-This list lives in security/ rather than beside the screener because TUT-18
-requires it here, so it can be extended during R1 testing without touching
-ingest code.
+Lives in security/ rather than beside the screener so it can be extended during
+adversarial testing without touching ingest code. Record each addition against
+the attempt in tests/adversarial-log-template.md.
 
-Seeded from the three patterns named in docs/threat-model.md section 3.3 and
-extended during R1 adversarial testing. Record each addition against the
-attempt in the log (tests/adversarial-log-template.md).
+A speed bump, not a guarantee. Widening these patterns took detection from 1/8
+to 4/8 injected files in data/test_files; the other four carry no jailbreak
+vocabulary at all (an answer-key request, an exfiltration phrased as
+verification, an instruction buried mid-paragraph, a forged exemption). No
+pattern list reaches those. The real defence is structural: labeled context
+blocks telling the model retrieved text is reference material.
 
-Two things to keep in mind before extending it:
-
-1. This is a speed bump, not a guarantee. The real defence against indirect
-   injection is structural: the labeled context blocks tell the
-   model retrieved text is reference material, not instructions.
-
-   Measured, against the 14-file corpus in data/test_files: widening these
-   patterns took detection from 1/8 to 4/8 injected files. The other four carry
-   no jailbreak vocabulary at all -- an answer-key request, an API-key
-   exfiltration phrased as verification, an instruction buried mid-paragraph,
-   and a forged instructor exemption. No pattern list of any length reaches
-   those. Do not read a low number here as a tuning problem.
-
-2. This course's material is *about* security. A lecture on prompt injection
-   legitimately contains "ignore previous instructions"; a slide on privilege
-   escalation contains "system:". Expect frequent false positives on correct
-   content, and do not weaken these patterns to suppress them. See
-   docs/ingest-pipeline.md section 4.4.
-
-   As of this writing the 27 real decks contain the word "ignore" zero times,
-   so the current false-positive count of zero is thin evidence rather than a
-   clean bill of health. Add a prompt-injection lecture and expect that to
-   change.
+This course's material is *about* security, so expect false positives on correct
+content and do not weaken patterns to suppress them. The 27 real decks contain
+"ignore" zero times, so today's count of zero is thin evidence, not a clean bill
+of health. See docs/ingest-pipeline.md 4.4.
 
 Authoring constraints -- screener.py calls re.finditer(pattern, text, re.I):
 
-- IGNORECASE is applied to every pattern. An acronym that doubles as a word
-  needs (?-i:...) or it fires on prose; `DAN` matching the name "Dan" is how
-  that was found.
-- MULTILINE is NOT applied. A pattern anchoring with ^ or $ must carry its own
-  (?m) or it silently anchors to the whole page and matches almost nothing.
-  `assistant-prefix` shipped broken for exactly this reason.
-- Patterns match the extracted text verbatim: no Unicode normalization, no
-  zero-width stripping, no base64 decoding happens first. Surface-form evasion
-  (letter spacing, U+200D inside a keyword, fullwidth characters) therefore
-  defeats any regex here, and belongs in a normalization pass in screener.py
-  rather than in a cleverer pattern.
-- A bounded filler gap -- (?:\w+\s+){0,3}? -- is preferred over a single
-  optional qualifier. "override your previous instructions" slipped past
-  override-instructions because only one qualifier slot existed.
+- IGNORECASE applies to every pattern. An acronym that doubles as a word needs
+  (?-i:...), or it fires on prose; `DAN` matched the name "Dan".
+- MULTILINE does NOT apply. A pattern using ^ or $ must carry its own (?m) or it
+  anchors to the whole page; `assistant-prefix` shipped broken this way.
+- Text is matched verbatim: no normalization, zero-width stripping or base64
+  decoding happens first. Surface-form evasion defeats any regex here and
+  belongs in screener.py's normalization pass instead.
+- Prefer a bounded filler gap, (?:\w+\s+){0,3}?, over one optional qualifier.
+  "override your previous instructions" slipped past with only one slot.
 """
 
 # (name, regex) pairs. The name is what gets reported in a Flag and written to
@@ -92,9 +71,9 @@ INJECTION_PATTERNS: tuple[tuple[str, str], ...] = (
     ("what-are-instructions", r"what\s+(?:are|were|is|was)\s+your\s+(?:original\s+|initial\s+|system\s+)?(?:instructions|rules|prompt)"),
     ("repeat-above", r"repeat\s+(?:\w+\s+){0,3}?(?:above|before|verbatim)"),
 
-    # Exfiltration. Low value on its own -- the outbound host allowlist (TUT-38)
-    # is the real control, and agents never call the network (TUT-36) -- but
-    # cheap, and it catches a document that states its intent plainly.
+    # Exfiltration. Low value alone -- the outbound host allowlist is the real
+    # control, and agents never call the network -- but cheap, and it catches a
+    # document that states its intent plainly.
     ("send-to-url", r"(?:send|post|upload|forward)\s+(?:this|it|the\s+\w+|all\s+\w+)\s+to\s+https?://"),
     ("markdown-image-exfil", r"!\[[^\]]*\]\(https?://[^)]*\?[^)]*="),
 )

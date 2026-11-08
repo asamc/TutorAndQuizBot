@@ -3,10 +3,10 @@
 Design and security requirements: docs/ingest-pipeline.md
 Contract with the UI: docs/ingest-interface.md
 
-ingest_document() -- the generator described in the interface doc -- is wired as
-of TUT-58: every stage from validating to indexing now exists, so INDEXED is a
-claim the pipeline can honestly make. It lives in ingest/pipeline.py and is
-re-exported here, which is the import the interface doc implies:
+ingest_document() -- the generator described in the interface doc -- is wired:
+every stage from validating to indexing exists, so INDEXED is a claim the
+pipeline can honestly make. It lives in ingest/pipeline.py and is re-exported
+here, which is the import the interface doc implies:
 
     from ingest import ingest_document
 

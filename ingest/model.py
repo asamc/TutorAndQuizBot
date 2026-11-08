@@ -1,13 +1,12 @@
 """Domain model for the ingest pipeline.
 
-The types in the "published contract" section below are transcribed verbatim from
-docs/ingest-interface.md section 3. They are already published to whoever builds
-the UI, so the names and string values here are a contract, not an implementation
-detail. tests/test_contract.py asserts they still match the document.
+The types under "published contract" are transcribed from
+docs/ingest-interface.md section 3 and the UI is built against them, so their
+names, string values and order are a contract rather than an implementation
+detail. tests/test_contract.py compares the two.
 
-PageRecord and Chunk are internal to ingest. PageRecord is the keystone: the
-screener and the chunker both read it, so its shape decides what they can do.
-See docs/ingest-pipeline.md section 2.
+PageRecord and Chunk are internal. PageRecord is the keystone: the screener and
+the chunker both read it, so its shape decides what they can do.
 """
 
 from dataclasses import dataclass
@@ -52,7 +51,7 @@ class Progress:
 class Flag:
     page: int | None  # page or slide number where the match was found
     pattern: str  # which screening rule matched, not the document text
-    excerpt: str | None  # bounded snippet; length still open, see TUT-18 vs TUT-54
+    excerpt: str | None  # bounded snippet; max length still an open decision
 
 
 @dataclass
@@ -93,8 +92,7 @@ class PageRecord:
 
 @dataclass
 class Chunk:
-    """One retrievable unit. Page-aligned: one chunk per page or slide, not
-    packed to a word budget. See TUT-16 for the measurement behind that."""
+    """One retrievable unit. One chunk per page or slide, not word-budgeted."""
 
     document_name: str  # original filename, for display and citations
     page_number: int
@@ -102,14 +100,13 @@ class Chunk:
     text: str
 
     def citation(self) -> str:
-        """Human-readable source reference, e.g.
-        'Lecture_1_slides.pdf, Slide 6: Integrity'.
+        """Source reference, e.g. 'Lecture_1_slides.pdf, Slide 6: Integrity'.
 
         The heading is preferred because it carries the slide number the
-        student sees, and the two disagree: the decks had hidden slides, so
-        Lecture 2's PDF page 4 is 'Slide 11: OSI Security Architecture'.
-        page_number stays the PDF index and is cited only when a document has no
-        outline, which is every .txt file. See docs/ingest-pipeline.md 5.1.
+        student sees, which disagrees with the PDF page number: the decks have
+        hidden slides, so Lecture 2's page 4 is "Slide 11". page_number stays
+        the PDF index and is cited only for documents with no outline, which is
+        every .txt file. See docs/ingest-pipeline.md 5.1.
         """
         if self.heading:
             return f"{self.document_name}, {self.heading}"

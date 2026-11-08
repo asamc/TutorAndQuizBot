@@ -1,37 +1,25 @@
-"""The orchestrator: `ingest_document()` from docs/ingest-interface.md section 3.
+"""The orchestrator. ingest_document() is the entry point the UI calls.
 
-Bytes and a filename in, `Progress` events out, exactly one `Result` as the
-final item. This is the whole published contract with the UI, and the stage
-order it runs is a security property in its own right -- ingest-pipeline 3.
+Bytes and a filename in, Progress events out, exactly one Result as the final
+item -- including for failures that are nobody's fault, since the caller has no
+other error channel. ingest/cli.py is one caller; a UI would be another.
 
     validating -> parsing -> screening -> chunking -> embedding -> indexing
 
-Four orderings were already load-bearing before this module existed: validate
-before parsing, hash the bytes as received, screen before indexing, validate in
-memory before writing to disk. Wiring the last two stages adds a fifth.
+That order is a security property; see docs/ingest-pipeline.md 3. The part this
+module owns is the last rule in it: **the manifest entry is the commit point, so
+it is written last, and a failure after the index write rolls the index back.**
+Nothing is recorded until the vectors are on disk.
 
-**The manifest entry is the commit point, so it is written last.** Nothing is
-recorded until the vectors are on disk. The alternative was measured in this
-repo rather than imagined: ten documents sat in the manifest claiming a chunk
-count while no index existed at all, because `record()` ran at the end of
-chunking. A re-upload of any of them would have reported `already_indexed` with
-a chunk count the system could not serve. So `already_indexed` now means
-something stronger than it used to -- the manifest knows these bytes *and* the
-index holds their vectors -- and a manifest entry without vectors is treated as
-a document that still needs indexing. Those ten entries therefore heal on
-re-upload instead of needing a migration.
+Two consequences. `already_indexed` means the manifest knows these bytes *and*
+the index holds their vectors, so an entry without vectors is treated as still
+needing work. And a run that dies between the index write and record() leaves
+vectors the manifest never heard of, which the next attempt at those bytes
+clears before re-indexing.
 
-The reverse drift is handled too. If a run dies between `index.save()` and
-`manifest.record()`, the index holds vectors for a document the manifest has
-never heard of. The next attempt at those bytes finds the manifest silent, the
-index occupied, and clears the orphan before re-indexing rather than failing on
-a duplicate id.
-
-**Failure messages come from the stage that failed**, and every stage was built
-to produce display-safe text: `ParseFailed`, `EmbeddingFailed` and `IndexFailed`
-all carry fixed strings written by us, never a library message and never
-document text (ingest-pipeline 4.5). That is what makes `str(exc)` safe to put
-in `Result.message` here, and it is the only reason it is safe.
+Failure messages come from the stage that failed. ParseFailed, EmbeddingFailed
+and IndexFailed all carry fixed strings, which is the only reason str(exc) is
+safe to put in Result.message here.
 """
 
 from __future__ import annotations
@@ -48,9 +36,8 @@ from ingest.model import Flag, Outcome, PageRecord, Progress, Result, Stage
 from ingest.parser import ParseFailed, parse
 from ingest.validator import ACCEPTED_SUFFIXES, MAX_UPLOAD_BYTES, validate
 
-# Display text for the three rejections. The validator returns an Outcome and
-# no words, deliberately -- what to say about a refusal is a UI concern, and
-# interface doc section 5 specifies it per outcome.
+# The validator returns an Outcome and no words; what to say about a refusal is
+# specified per outcome in docs/ingest-interface.md 5.
 _MEGABYTE = 1024 * 1024
 MESSAGE_REJECTED_TYPE = "Only {types} files can be uploaded.".format(
     types=" and ".join(suffix.upper().lstrip(".") for suffix in ACCEPTED_SUFFIXES)
@@ -64,8 +51,7 @@ MESSAGE_FLAGGED = (
     "review. Nothing has been stored or indexed."
 )
 
-# Failures that are the machine's fault, not the document's. All reach the user
-# as Outcome.INDEXING_FAILED.
+# The machine's fault, not the document's. All become INDEXING_FAILED.
 MESSAGE_MANIFEST_UNREADABLE = (
     "The record of ingested documents could not be read. It may be damaged."
 )
@@ -128,16 +114,13 @@ class Finding:
 def delete_document(doc_id: str, *, index_dir: Path = INDEX_DIR) -> Deletion:
     """Forget one document: its vectors, its stored bytes, its manifest entry.
 
-    **The order is the point, and it is not symmetric.** Vectors go first and
-    are made durable before the manifest entry is dropped. A crash the other
-    way round leaves vectors with no entry -- content the user asked to delete
-    that retrieval still answers from, and that verify() can report but not
-    name. A crash this way round leaves an entry with no vectors, which
+    **The order is not symmetric.** Vectors go first and are made durable
+    before the manifest entry is dropped. A crash the other way round leaves
+    vectors with no entry -- content the user asked to delete that retrieval
+    still answers from. A crash this way leaves an entry with no vectors, which
     verify() reports and reindex_pending() repairs.
 
-    That rule lived in the CLI until now, which meant the first UI to grow a
-    delete button would have had to rediscover it. Raises IndexFailed if the
-    index cannot be read or updated, rather than deleting half the state; lets
+    Raises IndexFailed rather than deleting half the state. Lets
     PermissionError through, because explaining it is the caller's job.
     """
     name = (manifest.lookup(doc_id) or {}).get("document_name") or doc_id[:16]
@@ -162,16 +145,15 @@ def delete_document(doc_id: str, *, index_dir: Path = INDEX_DIR) -> Deletion:
 def verify(*, index_dir: Path = INDEX_DIR) -> list[Finding]:
     """Re-hash every stored document and cross-check it against the index.
 
-    TUT-23 is the hash half. The index half is the drift this project actually
-    produced: a manifest entry with no vectors claims a chunk count nothing can
-    serve, and vectors with no entry are an orphan retrieval would still answer
-    from. Both are reported, never repaired here -- reindex_pending() fixes the
-    first, delete_document() the second.
+    Two kinds of drift: an entry with no vectors claims a chunk count nothing
+    can serve, and vectors with no entry are answerable but unnameable. Both
+    are reported, never repaired here -- reindex_pending() fixes the first and
+    delete_document() the second.
     """
     try:
         known = manifest.entries()
     except Exception:
-        # Unbound deliberately: the error carries the manifest path.
+        # Unbound on purpose: the error carries the manifest path.
         return [
             Finding(
                 kind=FindingKind.MANIFEST_UNREADABLE,
@@ -224,8 +206,7 @@ def _indexed_documents(index_dir: Path) -> tuple[dict[str, int], str | None]:
     """Chunk count per indexed document, plus why it could not be read.
 
     An unreadable index is reported and treated as empty rather than aborting:
-    the manifest half of verify is still worth running, and "the index will not
-    load" is itself the finding.
+    the manifest half of verify is still worth running.
     """
     if not ChunkIndex.exists(index_dir):
         return {}, None
@@ -245,10 +226,9 @@ def ingest_document(
 ) -> Iterator[Progress | Result]:
     """Yields Progress events, then exactly one Result as the final item.
 
-    The two keyword arguments are not part of the published contract: the UI
-    calls this with bytes and a filename only. They exist so tests can run the
-    whole pipeline without a local Ollama and without touching `data/index/`,
-    which is the same seam `Embedder(backend=...)` provides one layer down.
+    The two keyword arguments are not part of the published contract -- the UI
+    passes bytes and a filename only. They let tests run the whole pipeline
+    without a local Ollama and without touching data/index/.
     """
     embedder = embedder if embedder is not None else Embedder()
 
@@ -263,21 +243,15 @@ def ingest_document(
         )
         return
 
-    # Hashed before parsing, so the digest covers the bytes as received. An
-    # integrity check against anything derived would compare against an
-    # artifact that was never on disk. Pipeline doc 3.
+    # Hashed before parsing, so the digest covers the bytes as received.
     doc_id = manifest.document_id(data)
 
-    # Neither of the next two reads may raise past this point. The contract
-    # promises a Result as the final item, so an exception here would hand the
-    # UI a failure it has no channel for -- and both of these genuinely fail:
-    # the index is refused when corrupt or torn, and manifest.entries() raises
-    # on a damaged manifest *by design*, rather than reading as empty and
-    # re-ingesting everything.
+    # Neither read may raise past here: the contract promises a Result, and both
+    # genuinely fail -- a corrupt index is refused, and manifest.entries()
+    # raises on a damaged manifest by design rather than reading as empty.
     #
-    # The index is loaded without the embedder's spec on purpose: answering
-    # "have we seen this file?" must not require a running model. The spec is
-    # compared later, before anything is added.
+    # The index loads without the embedder's spec, so answering "have we seen
+    # this file?" needs no running model.
     index: ChunkIndex | None = None
     known: dict | None = None
     failure: str | None = None
@@ -288,8 +262,7 @@ def ingest_document(
         # Ours, and its message is a fixed display-safe string.
         failure = str(exc)
     except Exception:
-        # Deliberately unbound: a json or OS error message carries paths, and
-        # 4.5 forbids rendering a broadly caught exception.
+        # Unbound on purpose: a json or OS error message carries paths.
         failure = MESSAGE_MANIFEST_UNREADABLE
 
     if failure is not None:
@@ -322,8 +295,7 @@ def ingest_document(
     yield Progress(stage=Stage.SCREENING)
     flags = _screen(pages)
     if flags:
-        # Fail closed and stop here: once a chunk is in the index retrieval can
-        # surface it, and the gate has already failed. Threat model 3.3.
+        # Stop here: once a chunk is indexed retrieval can surface it.
         yield Result(
             outcome=Outcome.FLAGGED_INJECTION,
             document_name=filename,
@@ -337,8 +309,7 @@ def ingest_document(
     yield Progress(stage=Stage.CHUNKING, current=len(chunks), total=len(chunks))
 
     # --- embedding and indexing --------------------------------------
-    # One try around both, because they are one unit of work: embedding exists
-    # only to produce the index, and neither leaves anything behind on failure.
+    # One try around both: embedding exists only to produce the index.
     try:
         vectors = yield from embedder.embed_chunks(chunks)
 
@@ -353,19 +324,14 @@ def ingest_document(
         return
 
     # --- commit -------------------------------------------------------
-    # Only now, with the vectors durable, does this document become known. See
-    # the module docstring: the manifest entry is the commit point.
-    #
-    # Which is exactly why this needs a rollback. The vectors are already on
-    # disk, so a failure here without one would leave the document searchable
-    # while no record of it exists -- an orphan that verify() can report but
-    # cannot name, and that retrieval would happily answer from.
+    # The commit point. The vectors are already durable, so a failure here needs
+    # the rollback below or the document stays searchable with no record of it.
     commit_failure = None
     try:
         manifest.store(data, filename)
         manifest.record(doc_id, filename, len(pages), len(chunks))
     except Exception:
-        # Unbound for the same reason as above: OSError carries a path.
+        # Unbound for the same reason: OSError carries a path.
         commit_failure = MESSAGE_RECORD_FAILED
 
     if commit_failure is not None:
@@ -386,8 +352,8 @@ def ingest_document(
 def _screen(pages: list[PageRecord]) -> list[Flag]:
     """Screen, treating a screener error as flagged rather than clean.
 
-    A gate that fails open is worse than no gate, because it produces the
-    belief that screening ran when it silently did not. Pipeline doc 4.6.
+    A gate that fails open is worse than no gate: it produces the belief that
+    screening ran when it silently did not.
     """
     failed = False
     try:
@@ -402,10 +368,9 @@ def _screen(pages: list[PageRecord]) -> list[Flag]:
 def _open_index(index_dir: Path) -> ChunkIndex | None:
     """The stored index, or None when there is not one yet.
 
-    Deliberately loads without an expected spec. A spec mismatch is a refusal,
-    but refusing here would turn "this index was built with another model" into
-    a failure to answer whether a file is a duplicate, which is a worse message
-    for the same problem. `_prepare_index` compares the spec before adding.
+    Loads without an expected spec on purpose. Refusing here would turn "built
+    with another model" into a failure to answer whether a file is a duplicate;
+    _prepare_index compares the spec before adding.
     """
     if not ChunkIndex.exists(index_dir):
         return None
@@ -415,9 +380,8 @@ def _open_index(index_dir: Path) -> ChunkIndex | None:
 def _rollback(index: ChunkIndex, index_dir: Path, doc_id: str) -> bool:
     """Undo this document's index entry. False if that could not be done.
 
-    Best effort by necessity: if the write that failed was caused by a full
-    disk, the write that undoes it may fail too. Reporting that honestly is
-    better than a message implying the index is clean.
+    Best effort: if a full disk caused the failure, the undo may fail too.
+    Reporting that beats a message implying the index is clean.
     """
     ok = True
     try:
@@ -436,14 +400,12 @@ def _prepare_index(
     if index is None:
         return ChunkIndex.create(spec)
     if index.spec != spec:
-        # Stored vectors are not comparable with the ones just computed, and
-        # the symptom would be quietly worse ranking rather than an error. The
-        # message is index.py's, not a second copy of it.
+        # Stored vectors are not comparable with fresh ones, and the symptom is
+        # quietly worse ranking rather than an error.
         raise IndexFailed(MESSAGE_MISMATCH)
     if index.has_document(doc_id):
-        # The manifest said unknown and the index disagrees, so these vectors
-        # are the residue of a run that died before recording. Clear them
-        # rather than failing on a duplicate.
+        # The manifest said unknown, so these are the residue of a run that
+        # died before recording. Clear them rather than fail on a duplicate.
         index.remove(doc_id)
     return index
 
@@ -453,15 +415,11 @@ def reindex_pending(
 ) -> Iterator[Progress | Result]:
     """Re-run ingest for every manifest entry whose vectors are missing.
 
-    The repair path for documents recorded before indexing existed. It reads
-    the stored bytes back rather than trusting the manifest's counts, so a
-    document whose file is gone is reported rather than silently skipped, and
-    one whose bytes no longer hash to their recorded id never gets indexed.
+    Reads the stored bytes back and re-checks their hash first, so a document
+    whose file is gone is reported and one that changed is never indexed.
     """
-    # Which documents need work is decided once, up front. Re-reading the index
-    # after every document meant deserialising the whole thing per file -- 773
-    # KB at semester size -- to answer a question ingest_document() already
-    # handles itself through its orphan-vector path.
+    # Decided once, up front: re-reading the index per document deserialised
+    # the whole thing (773 KB at semester size) for no reason.
     index = _open_index(index_dir)
     already = set(index.documents()) if index is not None else set()
     pending = [
