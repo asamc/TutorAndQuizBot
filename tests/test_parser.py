@@ -3,6 +3,12 @@
 Fixtures: synthetic PDFs from pypdf's own writer (no fixture binaries, no new
 dependency), corrupted slices of a real deck, plain strings for .txt, and the
 real decks behind a skipif -- data/ is gitignored, so those skip in CI.
+
+Because they skip in CI, no security property may rest on a real deck alone.
+The leak guards in particular are synthetic and run everywhere, with the real
+decks asserting the same property as well rather than instead. Real-deck tests
+are parametrised over every deck via each_real_deck; see the note on it for what
+indexing REAL_DECKS cost us.
 """
 
 import io
@@ -10,7 +16,7 @@ import logging
 import pathlib
 
 import pytest
-from pypdf import PdfWriter
+from pypdf import PdfReader, PdfWriter
 
 from ingest.model import Chunk, PageRecord
 from ingest.parser import (
@@ -32,6 +38,18 @@ REAL_DECKS = sorted(DOCS.glob("*.pdf")) if DOCS.is_dir() else []
 needs_real_decks = pytest.mark.skipif(
     not REAL_DECKS, reason="data/documents is gitignored and empty on this clone"
 )
+
+# Real-deck assertions run against every deck, never REAL_DECKS[0].
+#
+# Indexing this list is a trap. It is a sorted glob, so which deck is under test
+# depends on whatever happens to be sitting in data/documents, and the decks are
+# not interchangeable: Lecture_1 to 5 carry a classic xref table while Lecture 6
+# to 27 carry PDF 1.5 cross-reference streams. " " sorts before "_", so adding
+# the later lectures moved REAL_DECKS[0] from the first generation to the second
+# and broke a leak test -- silently, because data/ is gitignored and the test
+# was guarded out of CI. Parametrising means a new deck widens the coverage
+# instead of changing the subject.
+each_real_deck = pytest.mark.parametrize("deck", REAL_DECKS, ids=lambda path: path.name)
 
 
 def blank_pdf(page_count: int = 1, outline: list[tuple[str, int]] | None = None) -> bytes:
@@ -91,17 +109,18 @@ def test_malformed_pdf_raises_parse_failed(name, data):
     assert str(excinfo.value) == MESSAGE_UNREADABLE, name
 
 
-@needs_real_decks
+@each_real_deck
 @pytest.mark.parametrize("fraction", [0.1, 0.5, 0.99])
-def test_truncated_real_pdf_raises_parse_failed(fraction):
-    data = REAL_DECKS[0].read_bytes()
+def test_truncated_real_pdf_raises_parse_failed(deck, fraction):
+    data = deck.read_bytes()
     with pytest.raises(ParseFailed):
         parse(data[: int(len(data) * fraction)], "truncated.pdf")
 
 
-@needs_real_decks
-def test_damaged_trailer_raises_parse_failed():
-    data = REAL_DECKS[0].read_bytes().replace(b"trailer", b"xxxxxxx")
+@each_real_deck
+def test_damaged_trailer_raises_parse_failed(deck):
+    # Equal length and every occurrence, for the reasons PLANTED_PHRASE records.
+    data = deck.read_bytes().replace(b"trailer", b"xxxxxxx")
     with pytest.raises(ParseFailed):
         parse(data, "damaged.pdf")
 
@@ -131,23 +150,73 @@ def test_encrypted_pdf_reports_encryption_not_missing_text():
 # ---------------------------------------------------------------------------
 
 
-@needs_real_decks
-def test_parse_failed_message_never_quotes_the_document():
-    """The highest-value test in this file.
+# Seven bytes, so it can overwrite b"trailer" without moving anything after it.
+#
+# How the document gets damaged is load-bearing, and the obvious way is wrong.
+# A replacement of a different length shifts every byte offset that follows it,
+# and replacing only the first occurrence leaves any later one intact -- a PDF
+# carrying cross-reference streams then recovers, parses cleanly, and the test
+# passes while proving nothing. Equal length and every occurrence instead, which
+# also puts the phrase exactly where pypdf chokes. That is what gets it into
+# pypdf's message, which is the whole thing being guarded against.
+PLANTED_PHRASE = b"SECRET!"
+assert len(PLANTED_PHRASE) == len(b"trailer")
 
-    pypdf's own error quotes ~100 bytes of the file it choked on -- verified:
-    planting a phrase and damaging the trailer puts that phrase inside
-    PdfReadError. ParseFailed must carry a fixed string instead, and the
-    original must not survive on __context__ or __cause__ either, where a
-    traceback-logging handler would print it.
+
+def plant_and_damage(pdf: bytes) -> bytes:
+    """A PDF that cannot be parsed, with PLANTED_PHRASE at the failure site."""
+    return pdf.replace(b"trailer", PLANTED_PHRASE)
+
+
+def test_parse_failed_message_never_quotes_the_document():
+    """The highest-value test in this file, and the reason it is synthetic.
+
+    pypdf's own error quotes ~100 bytes of the file it choked on. ParseFailed
+    must carry a fixed string instead, and the original must not survive on
+    __context__ or __cause__ either, where a traceback-logging handler would
+    print it.
+
+    This used to run only against the real decks, which meant it never ran in
+    CI at all: data/ is gitignored, so the skipif fired on every clone and every
+    runner. A synthetic PDF from pypdf's own writer reproduces the property
+    exactly, so the guard now runs on every push on all three operating systems.
+    The real decks are covered by the test below as well, not instead.
     """
-    planted = REAL_DECKS[0].read_bytes().replace(b"trailer", b"SECRETPHRASE", 1)
+    planted = plant_and_damage(blank_pdf(1))
+
+    # Guard the premise. If pypdf stops quoting file bytes, every assertion
+    # below would still pass while testing nothing at all.
+    with pytest.raises(Exception) as leaked:
+        PdfReader(io.BytesIO(planted))
+    assert PLANTED_PHRASE.decode() in str(leaked.value), (
+        "pypdf no longer leaks document bytes into its error; this test has "
+        "become vacuous and the fixture needs rebuilding"
+    )
 
     with pytest.raises(ParseFailed) as excinfo:
         parse(planted, "planted.pdf")
 
     error = excinfo.value
-    assert "SECRETPHRASE" not in str(error)
+    assert PLANTED_PHRASE.decode() not in str(error)
+    assert str(error) == MESSAGE_UNREADABLE
+    assert error.__cause__ is None
+    assert error.__context__ is None, "chained pypdf error still carries file bytes"
+
+
+@each_real_deck
+def test_parse_failed_never_quotes_a_real_deck(deck):
+    """The same property on real course material.
+
+    Not redundant with the synthetic test: these decks are a different PDF
+    generation. pypdf's writer emits a classic xref table, while most of the
+    lectures carry PDF 1.5 cross-reference streams, and that difference is
+    exactly what broke the original version of this test.
+    """
+    with pytest.raises(ParseFailed) as excinfo:
+        parse(plant_and_damage(deck.read_bytes()), "planted.pdf")
+
+    error = excinfo.value
+    assert PLANTED_PHRASE.decode() not in str(error)
     assert error.__cause__ is None
     assert error.__context__ is None, "chained pypdf error still carries file bytes"
 
@@ -176,11 +245,11 @@ def test_page_count_bound(monkeypatch):
     assert str(excinfo.value) == MESSAGE_TOO_MANY_PAGES
 
 
-@needs_real_decks
-def test_extracted_char_bound(monkeypatch):
+@each_real_deck
+def test_extracted_char_bound(deck, monkeypatch):
     monkeypatch.setattr("ingest.parser.MAX_EXTRACTED_CHARS", 100)
     with pytest.raises(ParseFailed) as excinfo:
-        parse(REAL_DECKS[0].read_bytes(), REAL_DECKS[0].name)
+        parse(deck.read_bytes(), deck.name)
     assert str(excinfo.value) == MESSAGE_TOO_MUCH_TEXT
 
 
@@ -351,17 +420,13 @@ def test_real_deck_heading_records_the_slide_number_the_student_sees():
     assert page_four.page_number == 4
 
 
-@needs_real_decks
-def test_real_deck_text_is_not_normalised():
+@each_real_deck
+def test_real_deck_text_is_not_normalised(deck):
     """The screener's non-mutation rule starts here: whatever pypdf returns for
     a page is what gets stored."""
-    import io as _io
-
-    from pypdf import PdfReader
-
-    deck = REAL_DECKS[0]
-    pages = parse(deck.read_bytes(), deck.name)
-    raw = PdfReader(_io.BytesIO(deck.read_bytes())).pages[1].extract_text()
+    data = deck.read_bytes()
+    pages = parse(data, deck.name)
+    raw = PdfReader(io.BytesIO(data)).pages[1].extract_text()
     assert pages[1].text == raw
 
 

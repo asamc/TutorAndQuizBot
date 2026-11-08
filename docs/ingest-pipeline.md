@@ -265,6 +265,19 @@ The **log grep is the highest-value single test here**, because it catches the e
 
 Note that `data/` is gitignored, so tests depending on the real lectures cannot run in CI or on a teammate's clone. Keep committed synthetic fixtures for the properties above, and guard real-material assertions so they skip when `data/documents/` is empty.
 
+### No security property may rest on a real deck alone
+
+Learned the hard way. The test asserting `ParseFailed` never quotes the document — the guard on the leak channel 4.5 is about — was written against the real decks only, so the skipif above fired on every clone and every CI runner. It had never once run outside the one machine holding the lectures, and it then broke on that machine too, from *adding data*: no code changed.
+
+Two things caused it, both worth knowing before writing another parser test:
+
+- **The decks are two different PDF generations.** `Lecture_1` to `Lecture 5` carry a classic xref table and one `trailer` keyword. `Lecture 6` to `Lecture 27` carry PDF 1.5 cross-reference streams and two. They are not interchangeable fixtures.
+- **Damaging a PDF is not as easy as it looks.** Replacing `trailer` with a *longer* string shifts every byte offset after it, and replacing only the first occurrence leaves the second intact — a cross-reference-stream PDF then recovers and parses cleanly, so the test passes while proving nothing. Replace with equal length, every occurrence; the phrase then also lands exactly where pypdf chokes, which is what gets it into pypdf's message in the first place.
+
+And because a sorted glob decides which deck `REAL_DECKS[0]` is, ` ` sorting before `_` moved the test from the first generation to the second. Real-deck assertions are parametrised over every deck now, so a new lecture widens the coverage instead of silently changing the subject.
+
+The resulting rule: **the synthetic fixture is the guard, and the real decks are the corroboration.** A synthetic PDF from pypdf's own writer reproduces the leak property exactly, so that test runs on every push on all three operating systems. It also asserts that pypdf *still* leaks the planted phrase into its own error, because the day that stops being true the test would keep passing while testing nothing.
+
 The planted-instruction PDF needed for the screener test is also the fixture TUT-43 needs for adversarial testing. Build it once.
 
 ## 8. Open Items
