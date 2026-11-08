@@ -237,6 +237,8 @@ For the Round 2 report: each control, the risk it serves, where it comes from, a
 | Screening runs before indexing | R1 | section 3.3 | A planted-instruction fixture is flagged and not indexed |
 | Screener never modifies text | R1 | section 3.3 | Flagged document text is byte-identical to input |
 | Metadata-only logging | R2 | section 4.1 | Log grep for a known document phrase returns nothing |
+| No `raise` inside an `except` handler | R2 | 4.5 | `tests/test_leak_invariants.py` fails on any, naming file and line |
+| No broad `except` renders the exception it caught | R2 | 4.5 | Same test; a narrow catch of our own error type is allowed |
 | Fail-closed on screener error | R1 | section 3.4 | An induced screener exception yields `flagged_injection`, not success |
 | `data/` permissions and gitignore | R2 | section 4.3 | `git check-ignore` covers `data/`; no commit contains it |
 
