@@ -181,7 +181,12 @@ Expect slower results on a machine with fewer cores, and faster on Apple Silicon
 
 ## Status
 
-Early scaffolding. Directory layout and documentation are in place; agent, ingestion, and UI code are not yet implemented.
+**Ingestion is complete and tested**, end to end: validate, parse, screen, hash, chunk, embed and
+index, driven by `ingest_document()` and exercised from `ingest/cli.py`. The whole 27-lecture
+semester ingests in about 17 seconds and retrieves with citations down to the slide.
+
+Still to come: the agents, retrieval wiring for them, the Streamlit UI, the internet lookup module,
+and encryption at rest for the index (the bonus build, TUT-49).
 
 ## Team Contributions
 

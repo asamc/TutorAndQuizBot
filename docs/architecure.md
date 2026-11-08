@@ -205,10 +205,25 @@ magnitude below the size where an approximate index earns its complexity. So `In
 normalised 768-dimension vectors: exact nearest-neighbour search, no training step, no recall to tune.
 
 The deciding factor is not search quality, which is exact either way, but how the index persists.
-`faiss.serialize_index()` returns a single `bytes` buffer, which is exactly the shape TUT-49 needs:
-AES-256-GCM over one blob with the index name as associated data, and no partially-written plaintext on
-disk in between. A store owning its own on-disk directory layout would have to be encrypted file by
-file, and a swapped file would be undetectable.
+`faiss.serialize_index()` hands back the whole index as one buffer, which is exactly the shape TUT-49
+needs: AES-256-GCM over a single blob, and no partially-written plaintext on disk in between. A store
+owning its own on-disk directory layout would have to be encrypted file by file, and a swapped file
+would be undetectable.
+
+Two corrections from implementing it (TUT-58, `ingest/index.py`):
+
+- **It returns a numpy `uint8` array, not `bytes`.** Harmless, but the encryption wrapper needs the
+  conversion rather than assuming a bytes-like buffer arrives.
+- **"A swapped file would be undetectable" turned out to apply to *this* design too**, not only to the
+  alternatives. There are two files — the index and its sidecar — and comparing vector counts does not
+  pair them: two indexes holding the same number of chunks, which is unremarkable across uniform
+  lecture decks, can have their vector files exchanged and the result loads cleanly, answering with one
+  document's vector while citing another's filename and page at a similarity of 1.0. Measured, before
+  it was fixed. Each write therefore stamps a random `generation` token into both files and load
+  refuses a pair that disagrees, which means the vectors file is a short header plus the faiss buffer
+  rather than the bare buffer. **Consequence for TUT-49:** the associated data should bind each file's
+  name *and* its generation, so an encrypted file cannot be replaced by an earlier encrypted version of
+  itself either.
 
 Qdrant, Weaviate and Milvus are ruled out on the criterion TUT-58 sets for itself: each runs as a server
 with a listening socket. That contradicts "fully locally with no network listener", puts a second

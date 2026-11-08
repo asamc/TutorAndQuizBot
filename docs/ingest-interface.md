@@ -70,6 +70,15 @@ def ingest_document(data: bytes, filename: str) -> Iterator[Progress | Result]:
     """Yields Progress events, then exactly one Result as the final item."""
 ```
 
+Implemented in `ingest/pipeline.py` and re-exported, so the import is `from ingest import
+ingest_document`. The implementation also accepts two keyword-only arguments, `embedder=` and
+`index_dir=`, which are **not part of this contract**: they exist so tests can run the whole pipeline
+without a local Ollama and without touching `data/index/`. Call it with bytes and a filename.
+
+"Exactly one Result as the final item" is a promise about every path, including the ones that are
+nobody's fault — a damaged manifest, an index that will not load, a full disk during the final write.
+Each of those is a `Result`, never an exception, because the UI has no other error channel.
+
 Progress is part of the contract, not an optional extra. TUT-51 requires progress shown during parsing, chunking and indexing, so a single blocking call cannot satisfy that story.
 
 ## 4. Progress Stages
@@ -144,6 +153,8 @@ Set `server.maxUploadSize = 50` in `.streamlit/config.toml` so the browser rejec
 - **Process layout** (TUT-55, Jacob). In-process is assumed above. A separate process turns section 3 into a wire format.
 - **How much flagged text may be displayed** (TUT-18 against TUT-54). TUT-18 requires the user be told what was flagged and where; TUT-54 and threat-model section 4.3 say the UI never displays raw document content. A flagged excerpt *is* document text. Defensible, because whoever uploaded the file already has it, but it needs an explicit decision and a maximum snippet length. `Flag.excerpt` is typed optional until then; `Flag.pattern` and `Flag.page` are safe to show either way.
 - **Expected ingest duration.** Partly measured, and smaller than first assumed. The real lecture decks hold ~440 to ~490 words each across 10 to 11 pages, which is roughly 10 chunks per lecture and a few hundred for a whole semester. Embedding that volume is quick, so **no stage is slow enough to need a progress bar for its own sake** — progress is still worth showing for the larger documents the pipeline should tolerate, but do not design the UI around a long wait. Now measured: `nomic-embed-text` on CPU runs **~13.2 chunks/s**, so a 10-chunk lecture is under a second and the whole ~250-chunk semester is about 20 seconds.
+
+  **Confirmed end to end, not extrapolated.** Ingesting all 27 decks through the finished pipeline — validate, parse, screen, chunk, embed, index, store, record, including 27 separate index writes — takes **16.9 s for 251 chunks**, and one lecture is well under a second. So the estimate above held, and the stages added since it was written cost nothing noticeable. Build the UI for a short wait with a progress indicator, not for a long one.
 
 ### The flagged-injection review
 

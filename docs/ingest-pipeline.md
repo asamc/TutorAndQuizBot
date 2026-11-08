@@ -59,7 +59,7 @@ Note that the CLI reads the bytes rather than handing over a path: interface doc
 
 ## 3. Stage Order Is a Security Property
 
-The order in `ingest-interface.md` section 4 is not stylistic. Four orderings are load-bearing.
+The order in `ingest-interface.md` section 4 is not stylistic. Five orderings are load-bearing.
 
 **Validate before parsing.** `pypdf` is a parser consuming hostile input. Do not hand it bytes that have not been checked.
 
@@ -68,6 +68,15 @@ The order in `ingest-interface.md` section 4 is not stylistic. Four orderings ar
 **Screen before indexing, never after.** Once a chunk is in the index, retrieval can surface it, and the gate has already failed. Section 3.3 of the threat model requires flagged documents to be held for review before indexing.
 
 **Validate in memory, then write to disk.** Persisting the upload before validating puts an unvalidated file inside the protected directory. At a 50 MB cap, holding the bytes in memory costs nothing.
+
+**Record last. The manifest entry is the commit point.** Nothing is stored or recorded until the vectors are on disk, and a failure after that rolls the index back. This one was learned from the repo rather than reasoned out in advance: `record()` used to run at the end of chunking, and the result was ten documents sitting in the manifest claiming a chunk count while no index existed at all. Re-uploading any of them would have reported `already_indexed` with a count the system could not serve.
+
+Two consequences worth stating, because both change what other parts of the system may assume:
+
+- **`already_indexed` means more than it used to** — the manifest knows these bytes *and* the index holds their vectors. An entry without vectors is treated as a document still needing indexing, so those ten entries heal on re-upload instead of needing a migration.
+- **The reverse drift is bounded too.** A run that dies between the index write and `record()` leaves vectors the manifest has never heard of. The next attempt at those bytes finds the manifest silent and the index occupied, and clears the orphan before re-indexing. `verify()` reports either kind of drift if it survives; `reindex_pending()` repairs the first and `delete_document()` the second.
+
+The same asymmetry governs deletion, in the other direction: vectors are purged and made durable **before** the manifest entry is dropped, because a crash the other way round leaves vectors retrieval still answers from — content the user asked to delete, which `verify()` can report but not name.
 
 ## 4. Security Rules
 
@@ -245,6 +254,10 @@ For the Round 2 report: each control, the risk it serves, where it comes from, a
 | No `raise` inside an `except` handler | R2 | 4.5 | `tests/test_leak_invariants.py` fails on any, naming file and line |
 | No broad `except` renders the exception it caught | R2 | 4.5 | Same test; a narrow catch of our own error type is allowed |
 | Index and sidecar paired by a per-write token | R2 | index.py | Swapping one file of an equal-sized index is refused, not served |
+| A failed ingest leaves no trace | — | section 3 | `store`/`record` raising rolls the index back; nothing recorded, no vectors kept |
+| Manifest/index drift is detectable | R2 | section 3 | `--verify` names an entry with no vectors, and vectors with no entry |
+| Deletion removes vectors before the entry | R2 | section 3 | Deleted content is unsearchable; a crash cannot leave it answerable |
+| Every failure reaches the UI as an Outcome | — | interface 3 | A corrupt index or manifest yields one `Result`, never an exception |
 | Index refuses a changed embedding model or prefix | — | index.py | A stored index built with other settings will not load |
 | Vectors must be unit length before indexing | — | index.py | Unnormalised input is refused rather than ranked by magnitude |
 | Fail-closed on screener error | R1 | section 3.4 | An induced screener exception yields `flagged_injection`, not success |
@@ -303,5 +316,5 @@ The planted-instruction PDF needed for the screener test is also the fixture TUT
 - **Process layout** (TUT-55). If ingest moves to its own process, section 3's ordering still holds but the call boundary becomes a wire format.
 - **DOCX is not implemented.** TUT-14 lists PDF, DOCX and TXT, but `python-docx` is not installed and no course material is DOCX. Accepting a file that cannot be parsed would surface as `parse_failed` and read like a corrupt document rather than a missing feature, so DOCX is rejected explicitly until the dependency lands.
 - ~~**Embedding throughput is unmeasured.**~~ Measured 2026-11-07: `nomic-embed-text` on CPU runs ~13.2 chunks/s, steady from 10 to 100 chunks per call, so the ~250-chunk semester embeds in about 20 seconds. See architecture doc 5.1.
-- **The flagged-review flow does not exist** (TUT-51). The CLI refuses a flagged document outright: nothing is stored, recorded or chunked. That is the fail-closed half of section 3.3; the "index anyway" decision needs the second entry point the interface doc's section 6 describes.
+- **The flagged-review flow does not exist** (TUT-51). `ingest_document()` refuses a flagged document outright: nothing is stored, recorded or indexed. That is the fail-closed half of section 3.3; the "index anyway" decision needs the second entry point the interface doc's section 6 describes. Note it is the orchestrator that refuses, not the CLI — the decision has to live below the front end, or each front end makes its own.
 - **`record()` takes a chunk count**, which the original TUT-17 signature did not. `Result.chunk_count` has to be reportable for `already_indexed`, and it is not derivable from the page count alone because empty pages are skipped.
