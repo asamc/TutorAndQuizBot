@@ -19,16 +19,14 @@ Team: Asa McDaniel, Alejandro Rubio, Elena MacCormack, Jacob Wallace, Kelly Nune
 
 - **Tutor Agent:** answers user questions from ingested documents, with citations to the source document and, where possible, the section within it.
 - **Quiz Agent:** generates randomly chosen or topic-specific quizzes (multiple-choice, true/false, open-ended), grades answers, and gives cited feedback.
-- **Privacy:** document content never leaves the machine. Internet lookups go through a separate module that never receives ingested documents.
-- **Security:** resistance to prompt injection, protection of the vector database and embeddings, and safe handling of API keys.
+- **Privacy:** nothing leaves the machine. The local model runtime binds to loopback only.
+- **Security:** resistance to prompt injection, and protection of the vector database and embeddings.
 - **Single UI:** one central interface for chatting, quizzing, and uploading documents.
 
 ## Architecture
 
 ```
 User -> UI -> Tutor Agent / Quiz Agent -> Retrieval (vector DB) -> Local Llama
-                                                                       |
-                                  Internet Lookup Module (no doc access) -> external API
 ```
 
 See [docs/architecure.md](docs/architecure.md) for the full design and [docs/threat-model.md](docs/threat-model.md) for the threat model.
@@ -49,9 +47,7 @@ TutorAndQuizBot/
 │   ├── architecure.md     # System architecture and data flow
 │   └── threat-model.md    # Attack surface, risks, and mitigations
 ├── ingest/            # Document parsing, chunking (one per page), hashing, indexing
-├── internet/          # Internet lookup module (only component with outbound access)
 ├── llm/               # Local Llama model loading and inference wrapper
-├── models/            # Model weights and configs (gitignored)
 ├── security/          # Prompt-injection filters, output redaction, encryption, key handling
 ├── tests/             # Unit tests and adversarial test cases
 ├── ui/                # Central web interface (chat, quiz, upload)
@@ -68,9 +64,7 @@ TutorAndQuizBot/
 | `data/documents` | Source files as ingested; access restricted to the service account |
 | `data/index` | Vector store and embeddings; encrypted when not in use |
 | `ingest` | Converts PDF/DOCX/TXT to text, chunks it, computes SHA-256 hashes, writes to the index |
-| `internet` | Sends search queries only, after scrubbing document content; holds the API key |
 | `llm` | Wraps the local Llama runtime; no outbound network calls |
-| `models` | Local model files; not committed to the repository |
 | `security` | Injection screening, output filtering for verbatim quotes and internal IDs, key loading |
 | `tests` | Adversarial prompts, traffic-verification scripts, integrity checks |
 | `ui` | Single interface for queries, quiz sessions, and document upload |
@@ -81,7 +75,6 @@ TutorAndQuizBot/
 - **[uv](https://docs.astral.sh/uv/)** for environment management
 - **[Ollama](https://ollama.com)** as the local model runtime
 - **`llama3.2:3b`** — one model serves both agents via separate prompt profiles
-- Optional: an API key for the internet lookup provider, read from the OS keychain
 
 Versions are pinned in `pyproject.toml` and `uv.lock`. A pip-compatible `requirements.txt` is
 exported from the lockfile for anyone not using uv.
@@ -98,8 +91,8 @@ environment verification, running the ingest pipeline, and tests.
 
 ## Secret scanning
 
-A secret scanner runs on every commit. This is a required defence for R3
-(see [docs/threat-model.md](docs/threat-model.md) section 5.3), so **everyone must install the
+A secret scanner runs on every commit. It guards the keychain-held index encryption key
+(see [docs/threat-model.md](docs/threat-model.md) section 4.3), so **everyone must install the
 hooks once after cloning** — see [SETUP.md](SETUP.md). Without that step the hooks do not fire
 for you.
 
@@ -107,7 +100,7 @@ On each commit, `detect-secrets` checks staged changes against `.secrets.baselin
 commit on a match. Three backstops run alongside it: private-key detection, a merge-conflict check,
 and a 5 MB file-size cap that catches model weights or course PDFs slipping past `.gitignore`.
 
-Verified behaviour: a planted fake Brave key and AWS secret were both caught, and `git commit`
+Verified behaviour: a planted fake API key and AWS secret were both caught, and `git commit`
 exited non-zero without creating the commit.
 
 If the scanner flags something that is genuinely not a secret, mark it inline with an allowlist
@@ -174,10 +167,10 @@ Expect slower results on a machine with fewer cores, and faster on Apple Silicon
 
 ## Security Notes
 
-- Documents and the index never leave the machine. The only outbound path is the internet lookup module, which receives search queries with document content removed.
+- Nothing reaches the network. Ollama binds to `127.0.0.1` and no component makes outbound calls.
 - The index is encrypted at rest and unlocked only while the application runs.
 - Document SHA-256 hashes are recorded at ingest and checked on load to detect tampering.
-- API keys are read from the environment or OS keychain and are never committed.
+- The index encryption key lives in the OS keychain and is never committed.
 
 ## Status
 
@@ -185,8 +178,8 @@ Expect slower results on a machine with fewer cores, and faster on Apple Silicon
 index, driven by `ingest_document()` and exercised from `ingest/cli.py`. The whole 27-lecture
 semester ingests in about 17 seconds and retrieves with citations down to the slide.
 
-Still to come: the agents, retrieval wiring for them, the Streamlit UI, the internet lookup module,
-and encryption at rest for the index (the bonus build, TUT-49).
+Still to come: the agents, retrieval wiring for them, the Streamlit UI, and encryption at rest
+for the index.
 
 ## Team Contributions
 

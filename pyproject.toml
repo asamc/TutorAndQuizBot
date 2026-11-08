@@ -11,7 +11,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "ollama>=0.4.0",      # client for the local Ollama runtime (loopback only)
     "pypdf>=5.0.0",       # PDF text extraction for the ingest pipeline
-    "keyring>=25.0.0",    # OS keychain access for the lookup API key (R3)
+    "keyring>=25.0.0",    # OS keychain access for the index encryption key
     "cryptography>=43.0", # AES-256-GCM for the bonus encrypted index (R2)
     "faiss-cpu>=1.15.0",  # IndexFlatIP + serialize_index (TUT-58)
     "numpy>=2.0",         # faiss's array interface; imported directly, so declared
@@ -27,7 +27,7 @@ ui = [
 [dependency-groups]
 # Installed by default on `uv sync`, so every teammate gets the hook tooling
 # without a separate step. Pure Python, so it works on all three OSes with no
-# Go toolchain (which rules out gitleaks as the local hook - see R3 notes).
+# Go toolchain, which rules out gitleaks as the local hook.
 dev = [
     "pre-commit>=4.0.0",
     "detect-secrets>=1.5.0",

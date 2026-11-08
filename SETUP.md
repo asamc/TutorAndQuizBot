@@ -72,8 +72,8 @@ Required once per clone. Without it the hooks do not fire for you.
 uv run pre-commit install
 ```
 
-Writes the hook into `.git/hooks/pre-commit`. Required defence for R3 — see
-[README.md](README.md#secret-scanning) for why, and `docs/threat-model.md` section 5.3.
+Writes the hook into `.git/hooks/pre-commit`. It guards the keychain-held index encryption key
+— see [README.md](README.md#secret-scanning) for why, and `docs/threat-model.md` section 4.3.
 
 ### What runs on every `git commit`
 

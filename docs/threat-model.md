@@ -4,12 +4,12 @@ Status: Round 1 draft. Mitigations describe the design; verification happens in 
 
 ## 1. Scope and Trust Boundary
 
-The system runs on the user's machine. The trust boundary encloses the UI, both agents, the local Llama runtime, the vector index, and the ingested documents. The only component permitted to cross the boundary is the Internet Lookup Module, which sends scrubbed search queries to Brave Search over HTTPS.
+The system runs on the user's machine. The trust boundary encloses the UI, both agents, the local Llama runtime, the vector index, and the ingested documents. No component crosses it: Ollama binds to loopback and nothing makes outbound network calls.
 
 Assets to protect:
 - Ingested course documents and their text
 - The vector index and embedding cache
-- The Brave Search API key
+- The index encryption key
 - Agent system prompts and internal document identifiers
 
 ```
@@ -21,12 +21,7 @@ Assets to protect:
  │                                          │                   │
  │  [Uploaded files] ─► [Ingest + SHA-256] ─┴─► [Vector index] ②│
  │                                                (encrypted*)  │
- │  [Agents] ── scrubbed query ──► [Internet Lookup] ③          │
- │                                   (key from keychain)        │
- └──────────────────────────────────────────┬───────────────────┘
-                                            │ HTTPS, allowlisted host
-                                            ▼
-                              [api.search.brave.com]
+ └──────────────────────────────────────────────────────────────┘
 
  * encryption at rest is the bonus build; base build uses
    filesystem permissions and .gitignore
@@ -35,7 +30,6 @@ Assets to protect:
 Entry points:
 - ① UI: chat input, quiz answers, file upload
 - ② Retrieval and storage: vector index, embedding cache, temp and swap files, backups
-- ③ Internet lookup: outbound query and API key
 
 ## 2. Risk Summary
 
@@ -43,7 +37,6 @@ Entry points:
 |---|---|---|---|---|
 | R1 | Prompt injection | Required | Refusal training, delimited context, input/output filters | Adversarial test log |
 | R2 | Vector index and embedding exposure | Required (permissions, gitignore); Bonus (encryption at rest) | Filesystem permissions, gitignore, OS-keychain-backed encryption (bonus) | Git check, copy-and-read test, hash check |
-| R3 | API-key leakage | Required | Keychain storage, host allowlist, TLS, redaction, scrubbed queries | gitleaks scan, redaction test, Wireshark capture |
 
 ## 3. R1: Prompt Injection
 
@@ -60,7 +53,6 @@ The agents must never:
 - Reproduce more than a short quote of any ingested document
 - Reveal the system prompt, retrieval settings, or internal document IDs
 - Follow instructions found inside retrieved text
-- Place document text into an internet search query
 - Show quiz answer keys before the user submits an answer
 
 ### 3.3 Defensive Layers
@@ -70,7 +62,6 @@ The agents must never:
 - **Input screening:** common jailbreak patterns in user messages are flagged. This is a speed bump, not a guarantee.
 - **Model training and prompting:** the agents are trained to refuse the behaviors listed in 3.2. This is the primary defense and is probabilistic.
 - **Output filtering:** responses are checked for verbatim spans longer than 15 words and for internal identifiers. The threshold is to be validated against real course passages so that legitimate citations are not blocked.
-- **Egress check:** the Internet Lookup Module scrubs outbound queries, so an injected instruction cannot leak document content through a search.
 
 ### 3.4 Residual Risk
 
@@ -134,48 +125,7 @@ Each attempt is logged with the prompt, the response, the result, and the fix ap
 - Ask the agents about their storage format and confirm they refuse.
 - Change one byte of a document or the index and confirm the hash check fails.
 
-## 5. R3: API-Key Leakage for Internet Lookups
+## 5. Open Items
 
-### 5.1 Attack Paths
-
-- **Source leak:** the key is committed to GitHub, pasted into the README, or printed in a log or error message.
-- **Transit exposure:** the key is sent over an unencrypted connection, or to a host other than the intended provider.
-- **Agent disclosure:** the key appears in agent output, for example when a user asks for the bot's configuration.
-- **Local exposure:** other processes or users read the key from environment variables or config files.
-
-### 5.2 Provider
-
-Brave Search API (`api.search.brave.com`), used as a placeholder search provider. The key is sent in the `X-Subscription-Token` header over HTTPS. Brave keys have no recognizable prefix, so redaction matches the exact loaded value and does not rely on a key pattern.
-
-### 5.3 Defensive Layers
-
-- **Storage:** the key is held in the OS keychain through `keyring`. Development may use an environment variable only in CI. Keys are never stored in files within the repository.
-- **Access:** only `internet/` reads the key. Agents and the UI never receive it.
-- **Transport:** requests use HTTPS only, with certificate verification enabled, and only to `api.search.brave.com`.
-- **Redaction:** the logger and output filter replace the exact key value with `[REDACTED]`, and a generic secret scanner runs as a backstop.
-- **Query scrubbing:** outbound queries are checked against indexed text, and any passage-level content is removed before sending.
-- **Commit protection:** a pre-commit secret scanner (`gitleaks` or `detect-secrets`) runs on every commit.
-- **Usage limits:** the key is set to the minimum permissions available, with a rate or spending limit configured in the Brave dashboard.
-
-### 5.4 Leak Response
-
-1. Revoke the key in the Brave dashboard.
-2. Issue a new key and store it in the keychain.
-3. Review usage logs for unexpected requests.
-4. Confirm no document text appeared in any outbound query.
-5. Record the incident in the report, even if the impact is zero.
-
-### 5.5 Test Plan
-
-- Run `gitleaks` against the full Git history and confirm no matches.
-- Pass a test key through the logger and output filter and confirm it is redacted.
-- Capture traffic with Wireshark or tcpdump during a lookup and confirm the only destination is `api.search.brave.com` over TLS.
-- Ask the Tutor Agent for its configuration and confirm the key is absent.
-- Revoke a test key and confirm the lookup fails without exposing error details.
-
-## 6. Open Items
-
-- Confirm Brave's current API documentation and free-tier terms before the Round 1 submission.
 - Validate the 15-word output threshold against real course passages.
-- Decide whether development allows an environment-variable fallback, or keychain only (recommended: keychain only, with an environment variable for CI).
 - Decide whether malicious file ingestion (embedded macros, scripts, zip bombs) becomes R4.

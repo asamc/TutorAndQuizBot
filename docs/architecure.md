@@ -4,7 +4,7 @@ Status: High-level draft. Component roles and communication are set. Process lay
 
 ## 1. Overview
 
-TutorAndQuizBot is a local question-answering and quiz system for network security course material. A user uploads course files, asks questions, and takes quizzes. Answers and feedback cite the source documents. Course content stays on the local machine. The only outbound connection is the Internet Lookup module, which sends scrubbed search queries and never receives document content.
+TutorAndQuizBot is a local question-answering and quiz system for network security course material. A user uploads course files, asks questions, and takes quizzes. Answers and feedback cite the source documents. Everything runs on the local machine and no component makes outbound network calls; Ollama binds to loopback only.
 
 ## 2. Components and Communication
 
@@ -20,10 +20,7 @@ flowchart LR
         Index[(Vector index<br/>+ chunk store)]
         Ingest[Ingest pipeline]
         LLM[Local LLM<br/>loopback only]
-        Lookup[Internet Lookup<br/>scrub + allowlist]
     end
-
-    Brave[(Brave Search API)]
 
     User --> UI
     UI -->|questions| Tutor
@@ -35,13 +32,9 @@ flowchart LR
     Retrieval <--> Index
     Tutor <--> LLM
     Quiz <--> LLM
-    Tutor -.->|structured search request| Lookup
-    Quiz -.->|structured search request| Lookup
-    Lookup -->|HTTPS, scrubbed query only| Brave
-    Brave -->|results with URLs| Lookup
 ```
 
-Solid arrows show the normal data path. Dashed arrows show a request that goes through the Internet Lookup module, which is the only component allowed to reach the network.
+Every arrow stays inside the local machine. Nothing in the diagram reaches the network.
 
 | Component | Role |
 |---|---|
@@ -52,7 +45,6 @@ Solid arrows show the normal data path. Dashed arrows show a request that goes t
 | Vector index and chunk store | Holds embeddings and chunk text with source metadata |
 | Ingest pipeline | Validates, parses, screens, hashes, chunks, embeds, and indexes files |
 | Local LLM | One local Llama model serving both agents |
-| Internet Lookup | Scrubs outbound queries, enforces the host allowlist, returns cited results |
 
 ## 3. Main Flows
 
@@ -85,7 +77,6 @@ sequenceDiagram
     participant Tutor
     participant Retrieval
     participant LLM
-    participant Lookup
 
     User->>UI: question
     UI->>Tutor: question
@@ -93,10 +84,6 @@ sequenceDiagram
     Retrieval-->>Tutor: top chunks with citation metadata
     Tutor->>LLM: question + chunks in labeled context blocks
     LLM-->>Tutor: draft answer
-    opt local material is insufficient
-        Tutor->>Lookup: structured search request
-        Lookup-->>Tutor: web results with URLs
-    end
     Tutor->>Tutor: output check (quote length, internal IDs)
     Tutor-->>UI: answer with citations
     UI-->>User: answer
@@ -133,24 +120,6 @@ sequenceDiagram
 
 Reference answers never leave the server side before the user submits.
 
-### 3.4 Internet Lookup
-
-```mermaid
-sequenceDiagram
-    participant Agent as Tutor or Quiz Agent
-    participant Lookup as Internet Lookup
-    participant Brave as Brave Search API
-
-    Agent->>Lookup: structured request {need_web, query}
-    Lookup->>Lookup: scrub query of document text
-    Lookup->>Lookup: check host allowlist
-    Lookup->>Brave: HTTPS request
-    Brave-->>Lookup: results
-    Lookup-->>Agent: results with URLs
-```
-
-Agents never make network calls themselves. They only send structured requests to the lookup module.
-
 ## 4. Trust Boundary
 
 ```mermaid
@@ -163,15 +132,9 @@ flowchart LR
         Store[(Index)]
         Ing[Ingest]
     end
-
-    Gate{{Internet Lookup<br/>only outbound path}}
-    Ext[(Brave Search)]
-
-    Inside --> Gate
-    Gate -->|scrubbed queries only| Ext
 ```
 
-Everything except the Internet Lookup module stays inside the boundary. The threat model describes the risks at this boundary.
+Nothing crosses the boundary. The threat model describes the risks inside it.
 
 ## 5. Decisions and Open Items
 

@@ -1,10 +1,9 @@
 name: CI
 
 # Scope note: no linting yet, and no test of the agents or retrieval, which do
-# not exist. This workflow enforces the R3 secret-scanning requirement
-# (docs/threat-model.md section 5.3), guards dependency drift, runs the test
-# suite, and verifies the environment builds on all three team operating
-# systems.
+# not exist. This workflow enforces secret scanning (docs/threat-model.md 4.3),
+# guards dependency drift, runs the test suite, and verifies the environment
+# builds on all three team operating systems.
 
 on:
   push:
