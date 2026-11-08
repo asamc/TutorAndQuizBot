@@ -30,17 +30,27 @@ uv run pre-commit install    # required, see section 2
 
 `uv sync` reads `.python-version` and `pyproject.toml`, fetches Python 3.12 if you do not have it,
 creates `.venv`, and installs the locked dependencies including the hook tooling. No flags are
-needed for ingest work.
+needed for ingest, embedding or indexing work.
 
-### Optional heavy extras — not needed for ingest
+`faiss-cpu` and `numpy` are in the default dependency set, not an extra: the `indexed` outcome is
+unreachable without them, so they are as core as `pypdf`. They add about 25 MB. Prebuilt wheels
+exist for every platform the team uses — macOS arm64 (14+) and x86_64 (15+), manylinux and musl on
+x86_64 and aarch64, Windows amd64 and arm64 — so nothing is built from source.
+
+`sentence-transformers` and `torch` were removed in TUT-66. `nomic-embed-text` runs through the
+Ollama runtime the project already depends on (architecture doc 5.1), so the second inference stack
+and its ~2–3 GB are gone, along with the Linux CPU-only `torch` index override that existed to keep
+it from dragging in ~18 CUDA packages.
+
+### Optional extra — not needed yet
 
 ```bash
-uv sync --extra ml
+uv sync --extra ui
 ```
 
-`--extra ml` adds `faiss-cpu`, `sentence-transformers`, `torch` and `streamlit`: roughly 2–3 GB.
-Pull it in only when retrieval (TUT-4) or the UI (TUT-10) lands. On Linux, `pyproject.toml` pins
-`torch` to the CPU-only index so it does not drag in ~18 CUDA packages.
+`--extra ui` adds `streamlit`, and nothing else. There is no UI module yet, so the pipeline is
+driven from `ingest/cli.py`; pull this in when the UI (TUT-10) lands. The extra was called `ml`
+until TUT-66 emptied it of everything but Streamlit.
 
 ### Without uv
 

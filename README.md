@@ -48,7 +48,7 @@ TutorAndQuizBot/
 ├── docs/
 │   ├── architecure.md     # System architecture and data flow
 │   └── threat-model.md    # Attack surface, risks, and mitigations
-├── ingest/            # Document parsing, chunking (~500 words), hashing, indexing
+├── ingest/            # Document parsing, chunking (one per page), hashing, indexing
 ├── internet/          # Internet lookup module (only component with outbound access)
 ├── llm/               # Local Llama model loading and inference wrapper
 ├── models/            # Model weights and configs (gitignored)
@@ -86,9 +86,10 @@ TutorAndQuizBot/
 Versions are pinned in `pyproject.toml` and `uv.lock`. A pip-compatible `requirements.txt` is
 exported from the lockfile for anyone not using uv.
 
-The sentence-embedding model, vector store, and Streamlit are declared as the `ml` extra but are
-**not installed by default** — they add roughly 2–3 GB. Install them when you start work that needs
-them; see [SETUP.md](SETUP.md).
+The vector store (`faiss-cpu`) is a default dependency: the pipeline cannot finish an ingest without
+it. Embeddings come from `nomic-embed-text` through Ollama rather than a second Python inference
+stack, so `sentence-transformers` and `torch` are no longer dependencies at all (TUT-66). Streamlit
+is declared as the `ui` extra and **not installed by default**; see [SETUP.md](SETUP.md).
 
 ## Setup and usage
 

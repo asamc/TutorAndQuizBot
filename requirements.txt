@@ -14,6 +14,8 @@ cryptography==50.0.2 ; sys_platform == 'darwin' or sys_platform == 'linux' or sy
     # via
     #   secretstorage
     #   tutorandquizbot
+faiss-cpu==1.15.1 ; sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'
+    # via tutorandquizbot
 h11==0.16.0 ; sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'
     # via httpcore
 httpcore==1.0.9 ; sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'
@@ -40,8 +42,14 @@ more-itertools==11.2.1 ; sys_platform == 'darwin' or sys_platform == 'linux' or 
     # via
     #   jaraco-classes
     #   jaraco-functools
+numpy==2.5.4 ; sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'
+    # via
+    #   faiss-cpu
+    #   tutorandquizbot
 ollama==0.6.3 ; sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'
     # via tutorandquizbot
+packaging==26.3 ; sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'
+    # via faiss-cpu
 pycparser==3.12 ; (implementation_name != 'PyPy' and platform_python_implementation != 'PyPy' and sys_platform == 'darwin') or (implementation_name != 'PyPy' and platform_python_implementation != 'PyPy' and sys_platform == 'linux') or (implementation_name != 'PyPy' and platform_python_implementation != 'PyPy' and sys_platform == 'win32')
     # via cffi
 pydantic==2.14.2 ; sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'

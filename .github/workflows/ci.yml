@@ -125,10 +125,29 @@ jobs:
       # Proves the Ollama client imports on this platform. It does not contact
       # a model: pulling 2 GB per run would be wasteful, and the loopback bind
       # check in the README is inherently a local check.
+      #
+      # faiss-cpu is the only compiled wheel in the project, so it is the one
+      # dependency most likely to be missing for a teammate's OS and arch. That
+      # makes this the job that matters for it -- and it has to be a default
+      # dependency to be reachable here, since this step runs a plain
+      # `uv sync --locked` with no extras.
       - name: Runtime dependencies import
         shell: bash
         run: |
-          uv run python -c "import ollama, pypdf, keyring, cryptography; print('imports OK')"
+          uv run python -c "import ollama, pypdf, keyring, cryptography, faiss, numpy; print('imports OK')"
+
+      # Not just an import: exercises the exact index type TUT-58 chose, so a
+      # wheel that loads but cannot run on this platform fails here rather than
+      # during an ingest.
+      - name: Faiss index round-trip
+        shell: bash
+        run: |
+          uv run python -c "
+          import faiss, numpy as np
+          index = faiss.IndexIDMap2(faiss.IndexFlatIP(768))
+          index.add_with_ids(np.zeros((2, 768), dtype='float32'), np.array([7, 9], dtype='int64'))
+          assert faiss.deserialize_index(faiss.serialize_index(index)).ntotal == 2
+          print('faiss OK', faiss.__version__)"
 
       # The suite also runs on ubuntu in the `tests` job on every push. Running
       # it here adds the macOS and Windows coverage that TUT-11 needs.
