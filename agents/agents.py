@@ -32,6 +32,9 @@ from typing import Iterable
 
 import ollama
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ingest import cli
+
 
 SUPPORTED_TEXT = {".txt", ".md", ".rst", ".csv", ".json", ".py", ".java",
                   ".c", ".cpp", ".h", ".hpp", ".html", ".xml", ".yaml", ".yml"}
@@ -134,6 +137,10 @@ class KnowledgeBase:
             try:
                 text = read_file(path)
                 pieces = split_into_chunks(text)
+
+                #ingest from cli.py
+                manifest = cli.ingest(path)
+                
                 if not pieces:
                     print(f"[skip] No extractable text: {path}")
                     continue
