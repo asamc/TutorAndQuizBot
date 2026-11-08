@@ -34,6 +34,10 @@ class Outcome(str, Enum):
     REJECTED_SIZE = "rejected_size"
     REJECTED_CONTENT_MISMATCH = "rejected_content_mismatch"
     PARSE_FAILED = "parse_failed"
+    # The only outcome that is not a verdict on the document: the file was fine
+    # and embedding or the index write could not complete. Retryable, and
+    # nothing is stored or recorded. See docs/ingest-interface.md section 5.
+    INDEXING_FAILED = "indexing_failed"
     FLAGGED_INJECTION = "flagged_injection"
 
 

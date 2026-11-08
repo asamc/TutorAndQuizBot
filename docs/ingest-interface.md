@@ -43,6 +43,7 @@ class Outcome(str, Enum):
     REJECTED_SIZE             = "rejected_size"
     REJECTED_CONTENT_MISMATCH = "rejected_content_mismatch"
     PARSE_FAILED              = "parse_failed"
+    INDEXING_FAILED           = "indexing_failed"
     FLAGGED_INJECTION         = "flagged_injection"
 
 @dataclass
@@ -95,12 +96,42 @@ Every run ends in exactly one of these. Each needs different UI treatment, so th
 | `rejected_size` | Over the 50 MB cap | Rejection, state the limit |
 | `rejected_content_mismatch` | Extension disagrees with actual content | Rejection, no file internals |
 | `parse_failed` | Text extraction failed | Show `message` only |
+| `indexing_failed` | Embedding or the index write could not complete | Show `message` only, and offer a retry. See below |
 | `flagged_injection` | Instruction-like phrasing found | Review screen, see section 6 |
 
 Two display rules apply to every `message`:
 
 - Never show file internals, stack traces or library errors (TUT-15).
 - Never show vectors, raw chunks, embeddings or internal document IDs (TUT-54, threat-model section 4.3).
+
+### `indexing_failed` is the one outcome that is not about the document
+
+Every other outcome is a verdict on the uploaded file: its type, its size, whether its bytes match its
+extension, whether text could be extracted, how it is phrased. Those are deterministic — the same bytes
+produce the same outcome every time, so "rejected" means *do not bother trying this file again*.
+
+`indexing_failed` is a verdict on **the machine**. It means the document was accepted, parsed and screened
+cleanly, and then embedding or the index write could not complete. The usual causes are the local Ollama
+runtime not running, the `nomic-embed-text` model not pulled, no space or permission to write
+`data/index/`, or no keychain available to unlock the encrypted index (threat-model 4.3 requires refusing
+rather than falling back to a key file).
+
+Three consequences for the UI:
+
+- **It is retryable, and the remedy is on the machine, not in the file.** The same upload will succeed once
+  the cause is fixed. Do not word it as a rejection, and do not tell the user their document is faulty.
+- **Nothing was stored, recorded or indexed.** A failed run leaves no trace, so a retry is a plain re-upload
+  rather than a resume, and the next attempt will not report `already_indexed`.
+- **`message` carries the remedy**, as a fixed string written by us — "The local embedding model is not
+  available." — never the underlying exception. `ollama`'s own errors are safe-looking but they are library
+  errors, which the first display rule above already forbids, and the parser's are measurably worse
+  (ingest-pipeline 4.5).
+
+Before this existed there was no honest answer here: `parse_failed` was the closest fit and it is a lie,
+because it would tell someone whose Ollama is simply not started that their PDF is corrupt.
+
+Which stage failed is available from the last `Progress` event the UI received — `embedding` or `indexing` —
+so the outcome deliberately does not encode it twice.
 
 ### Upload size cap
 
