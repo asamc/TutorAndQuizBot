@@ -2,19 +2,12 @@
 """
 TutorBot + QuizBot: local document-grounded study assistant using Ollama.
 
-Install:
-    pip install ollama pypdf python-docx
-
-Make sure Ollama is running, then pull the models (defaults shown):
-    ollama pull llama3.2:3b
-    ollama pull nomic-embed-text
+base model and embedding expected installed
+model: llama 3.2:3b
+embedding: nomic-embed-text
 
 Run:
     python agents.py notes.pdf chapter1.txt slides.docx
-
-You can also pass filenames interactively:
-    python study_bots.py
-    add notes.pdf chapter1.txt
 
 Commands in the interactive session:
     tutor <question>       Ask TutorBot for an explanation.
@@ -25,7 +18,6 @@ Commands in the interactive session:
     help                   Show commands.
     quit                   Exit.
 
-The document index is held in memory for the duration of this program.
 """
 
 from __future__ import annotations
@@ -276,8 +268,6 @@ def main():
     print(f"Chat model: {args.model} | Embedding model: {args.embedding_model}")
     print_help()
 
-    defaultBot = "tutor"
-
     while True:
         try:
             command = input("\nYou> ").strip()
@@ -321,7 +311,6 @@ def main():
             print(f"\n{bot.name}>")
             try:
                 print(bot.ask(prompt))
-                defaultBot = "tutor"
             except Exception as exc:
                 print(f"[error] {exc}")
             continue
@@ -331,7 +320,6 @@ def main():
             print("\nQuizBot>")
             try:
                 print(quiz.ask(prompt))
-                defaultBot = "quiz"
             except Exception as exc:
                 print(f"[error] {exc}")
             continue
@@ -349,30 +337,11 @@ def main():
             continue
 
         # Treat an unprefixed line as a TutorBot question for convenience.
-        if defaultBot == "tutor":
-            print("\nTutorBot>")
-            try:
-                print(tutor.ask(command))
-            except Exception as exc:
-                print(f"[error] {exc}")
-            continue
-
-        if defaultBot == "quiz":
-            print("\nQuizBot>")
-            try:
-                print(quiz.ask(command))
-            except Exception as exc:
-                print(f"[error] {exc}")
-            continue
-
-        #failcase default to tutor
         print("\nTutorBot>")
         try:
             print(tutor.ask(command))
         except Exception as exc:
             print(f"[error] {exc}")
-
-        
 
 
 if __name__ == "__main__":
