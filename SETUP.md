@@ -42,8 +42,10 @@ Ollama runtime the project already depends on (architecture doc 5.1), so the sec
 and its ~2–3 GB are gone, along with the Linux CPU-only `torch` index override that existed to keep
 it from dragging in ~18 CUDA packages.
 
-`pyside6` is also a default dependency, for the desktop UI in `ui/main.py`. It replaces the
-`ui` extra, which only ever held `streamlit` and was never used.
+`pyside6-essentials` is also a default dependency, for the desktop UI in `ui/main.py`. It is the
+core Qt modules only (QtCore, QtGui, QtWidgets), without the WebEngine, PDF and other add-ons that
+the full `pyside6` package pulls in. It replaces the `ui` extra, which only ever held `streamlit`
+and was never used.
 
 ### Without uv
 

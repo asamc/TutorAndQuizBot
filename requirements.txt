@@ -58,21 +58,8 @@ pydantic-core==2.50.2 ; sys_platform == 'darwin' or sys_platform == 'linux' or s
     # via pydantic
 pypdf==6.21.4 ; sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'
     # via tutorandquizbot
-pyside6==6.12.0 ; sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'
-    # via tutorandquizbot
-pyside6-addons==6.12.0 ; sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'
-    # via
-    #   pyside6
-    #   pyside6-webengine
 pyside6-essentials==6.12.0 ; sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'
-    # via
-    #   pyside6
-    #   pyside6-addons
-    #   pyside6-pdf
-pyside6-pdf==6.12.0.140 ; sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'
-    # via pyside6
-pyside6-webengine==6.12.0.140 ; sys_platform == 'darwin' or sys_platform == 'linux' or sys_platform == 'win32'
-    # via pyside6
+    # via tutorandquizbot
 pywin32-ctypes==0.2.3 ; sys_platform == 'win32'
     # via keyring
 secretstorage==3.5.0 ; sys_platform == 'linux'

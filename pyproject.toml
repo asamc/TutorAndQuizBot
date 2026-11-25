@@ -15,7 +15,7 @@ dependencies = [
     "cryptography>=43.0", # AES-256-GCM for the bonus encrypted index (R2)
     "faiss-cpu>=1.15.0",  # IndexFlatIP + serialize_index (TUT-58)
     "numpy>=2.0",         # faiss's array interface; imported directly, so declared
-    "pyside6>=6.8",       # desktop UI, ui/main.py
+    "pyside6-essentials>=6.8", # desktop UI, ui/main.py (QtCore/QtGui/QtWidgets only)
 ]
 
 [dependency-groups]
