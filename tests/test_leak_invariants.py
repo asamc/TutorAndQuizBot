@@ -55,18 +55,10 @@ BROAD_CATCHES = {"Exception", "BaseException"}
 
 # Files allowed to violate these rules, with the reason. Strictly temporary:
 # every entry is a known leak, not an accepted one.
-EXEMPT = {
-    "agents/agents.py": (
-        "Standalone prototype that predates the pipeline and bypasses it "
-        "entirely -- its own reader, chunker and in-memory search, no "
-        "validator, screener or manifest. It breaks both rules (raise inside "
-        "except at the import guards, and five `print(f\"[error] {exc}\")` "
-        "sites under `except Exception`). Not fixed here because the file is "
-        "being rewired onto ingest/ rather than patched; this exemption goes "
-        "away with that work, and until then the leak is recorded rather than "
-        "claimed as absent."
-    ),
-}
+#
+# Empty: agents/agents.py was the last entry, removed once it was rewired onto
+# ingest/ and its broad catches stopped rendering the caught exception.
+EXEMPT: dict[str, str] = {}
 
 
 def source_files() -> list[pathlib.Path]:

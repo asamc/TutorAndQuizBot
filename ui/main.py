@@ -20,10 +20,7 @@ from PySide6.QtWidgets import (
     QSplitter, QVBoxLayout, QWidget,
 )
 
-try:
-    from agents import StudyAssistant
-except ImportError:
-    from agents.agents import StudyAssistant
+from agents.agents import DISPLAY_SAFE_ERRORS, StudyAssistant
 
 MAX_FILE_SIZE = 50 * 1024 * 1024
 
@@ -79,6 +76,9 @@ class AgentTask(QRunnable):
         try:
             result = self.function()
             self.signals.finished.emit(self, self.header, result)
+        except DISPLAY_SAFE_ERRORS as exc:
+            # Our own fixed messages, written to name a remedy.
+            self.signals.failed.emit(self, self.header, str(exc))
         except Exception as exc:
             # Type name only: the message may quote document bytes
             # (ingest-pipeline 4.5).

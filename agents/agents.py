@@ -37,9 +37,57 @@ from typing import Iterable
 import ollama
 
 from ingest import ingest_document, manifest
-from ingest.embedder import Embedder, OllamaBackend
-from ingest.index import INDEX_DIR, ChunkIndex, Hit
+from ingest.embedder import EmbeddingFailed, Embedder, OllamaBackend
+from ingest.index import INDEX_DIR, ChunkIndex, Hit, IndexFailed
 from ingest.model import Result
+
+# Shown to the user, so they name a remedy, not an internal.
+MESSAGE_CHAT_UNAVAILABLE = (
+    "The local chat service is not running. Start Ollama and try again."
+)
+MESSAGE_CHAT_MODEL_MISSING = (
+    "The chat model is not installed. Run: ollama pull {model}"
+)
+MESSAGE_CHAT_FAILED = "The chat model could not answer. Try again."
+
+
+class ChatFailed(Exception):
+    """The chat call could not complete. Carries a fixed message, never library text."""
+
+
+# Exception types whose message we wrote ourselves, so it is safe to show in
+# full. Anything else is shown by type name only: its message may quote
+# document bytes (docs/ingest-pipeline.md 4.5). Front ends catch these first.
+DISPLAY_SAFE_ERRORS = (ChatFailed, EmbeddingFailed, IndexFailed)
+
+
+def chat(model: str, messages: list[dict[str, str]]) -> str:
+    """One ollama.chat call; raises only ChatFailed.
+
+    Same shape as embedder.OllamaBackend.embed: the status code is read off
+    the error to classify it, the error itself is never shown or chained, and
+    the raise happens after the handler exits.
+    """
+    status = None
+    unavailable = False
+    failed = False
+    try:
+        response = ollama.chat(model=model, messages=messages)
+        return response["message"]["content"]
+    except ConnectionError:
+        # ollama raises the builtin for a refused loopback connection.
+        unavailable = True
+        failed = True
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        failed = True
+
+    if failed:
+        if unavailable:
+            raise ChatFailed(MESSAGE_CHAT_UNAVAILABLE)
+        if status == 404:
+            raise ChatFailed(MESSAGE_CHAT_MODEL_MISSING.format(model=model))
+        raise ChatFailed(MESSAGE_CHAT_FAILED)
 
 
 def describe(result: Result) -> str:
@@ -205,8 +253,7 @@ class StudyBot:
         messages.extend(self.history[-8:])
         messages.append({"role": "user", "content": user_message})
 
-        response = ollama.chat(model=self.chat_model, messages=messages)
-        answer = response["message"]["content"]
+        answer = chat(self.chat_model, messages)
         self.history.append({"role": "user", "content": question})
         self.history.append({"role": "assistant", "content": answer})
         return answer + sources_footer(matches)
@@ -296,6 +343,19 @@ class StudyAssistant:
         return self.knowledge.sources()
 
 
+def ask_and_print(bot: StudyBot, prompt: str) -> bool:
+    """Print the bot's answer, or a display-safe error. True on success."""
+    print(f"\n{bot.name}>")
+    try:
+        print(bot.ask(prompt))
+        return True
+    except DISPLAY_SAFE_ERRORS as exc:
+        print(f"[error] {exc}")
+    except Exception as exc:
+        print(f"[error] {type(exc).__name__} (details withheld)")
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Chat with TutorBot and QuizBot over your files.")
     parser.add_argument("files", nargs="*", help="Files to ingest (TXT, Markdown, PDF, DOCX, and code/text files)")
@@ -363,24 +423,14 @@ def main():
             if not payload:
                 print("Usage: tutor <question>")
                 continue
-            bot = tutor
-            prompt = payload
-            print(f"\n{bot.name}>")
-            try:
-                print(bot.ask(prompt))
+            if ask_and_print(tutor, payload):
                 defaultBot = "tutor"
-            except Exception as exc:
-                print(f"[error] {exc}")
             continue
 
         if action == "quiz":
             prompt = payload or "Create a 5-question quiz covering the key concepts in these materials."
-            print("\nQuizBot>")
-            try:
-                print(quiz.ask(prompt))
+            if ask_and_print(quiz, prompt):
                 defaultBot = "quiz"
-            except Exception as exc:
-                print(f"[error] {exc}")
             continue
 
         if action == "ask":
@@ -388,38 +438,11 @@ def main():
                 print("Usage: ask <question>")
                 continue
             for bot in (tutor, quiz):
-                print(f"\n{bot.name}>")
-                try:
-                    print(bot.ask(payload))
-                except Exception as exc:
-                    print(f"[error] {exc}")
+                ask_and_print(bot, payload)
             continue
 
-        # Treat an unprefixed line as a TutorBot question for convenience.
-        if defaultBot == "tutor":
-            print("\nTutorBot>")
-            try:
-                print(tutor.ask(command))
-            except Exception as exc:
-                print(f"[error] {exc}")
-            continue
-
-        if defaultBot == "quiz":
-            print("\nQuizBot>")
-            try:
-                print(quiz.ask(command))
-            except Exception as exc:
-                print(f"[error] {exc}")
-            continue
-
-        #failcase default to tutor
-        print("\nTutorBot>")
-        try:
-            print(tutor.ask(command))
-        except Exception as exc:
-            print(f"[error] {exc}")
-
-        
+        # Treat an unprefixed line as a question for the most recently used bot.
+        ask_and_print(quiz if defaultBot == "quiz" else tutor, command)
 
 
 if __name__ == "__main__":
