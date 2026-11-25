@@ -211,6 +211,20 @@ class KnowledgeBase:
         return index.search(self.embedder.embed_query(query), top_k)
 
 
+def sources_footer(hits: list[Hit]) -> str:
+    """The retrieved citations, listed by code rather than by the model.
+
+    A small model paraphrases or miscopies the labels it was given, so the
+    reliable list is built from the hits themselves. Duplicates are dropped,
+    retrieval order is kept. Not stored in history, so the model never learns
+    to imitate it.
+    """
+    citations = list(dict.fromkeys(hit.citation() for hit in hits))
+    if not citations:
+        return ""
+    return "\n\nSources:\n" + "\n".join(f"- {c}" for c in citations)
+
+
 class StudyBot:
     def __init__(self, name: str, system_prompt: str, knowledge: KnowledgeBase,
                  chat_model: str, top_k: int = 5):
@@ -225,16 +239,16 @@ class StudyBot:
         matches = self.knowledge.retrieve(question, self.top_k)
         if matches:
             context = "\n\n".join(
-                f"[Source: {hit.chunk.document_name} | Retrieved passage {i}]\n{hit.chunk.text}"
-                for i, hit in enumerate(matches, start=1)
+                f"[Source: {hit.citation()}]\n{hit.chunk.text}" for hit in matches
             )
         else:
             context = "(No relevant document passages were found.)"
 
         user_message = (
             "Use the following retrieved files as your primary source. "
-            "Distinguish any general background knowledge from information found in the files."
-            "Give a citation(s) for your answer(s) of the form (filename): Pg (page or slide number).\n\n"
+            "Distinguish any general background knowledge from information found in the files. "
+            "Cite each claim taken from the files with its Source label, copied exactly "
+            "as given in brackets, e.g. (Lecture_1_slides.pdf, Slide 6: Integrity).\n\n"
             f"FILES:\n{context}\n\n"
             f"USER REQUEST:\n{question}"
         )
@@ -248,7 +262,7 @@ class StudyBot:
         answer = response["message"]["content"]
         self.history.append({"role": "user", "content": question})
         self.history.append({"role": "assistant", "content": answer})
-        return answer
+        return answer + sources_footer(matches)
 
 
 def build_bots(knowledge: KnowledgeBase, chat_model: str, top_k: int):

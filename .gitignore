@@ -4,7 +4,7 @@ tests/test_pipeline.py
 
 # Course material, vector index, embedding cache (threat model R2)
 **/data
-
+**/uploaded_documents
 # Python
 __pycache__/
 *.py[cod]

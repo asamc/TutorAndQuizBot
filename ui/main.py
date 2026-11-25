@@ -4,7 +4,10 @@ Run from the project folder:
     uv run python -m ui.main
 """
 
+import os
+import signal
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -146,7 +149,44 @@ class ChatPanel(QFrame):
         send_button.setObjectName("send")
         send_button.clicked.connect(self.send_message)
         input_row.addWidget(send_button, alignment=Qt.AlignmentFlag.AlignBottom)
+
+        # Shown while a request is running. A CPU-only model can take a minute
+        # to answer, and without this the panel looks dead in the meantime.
+        self.pending = 0
+        self.thinking_since = 0.0
+        self.thinking_label = QLabel()
+        self.thinking_label.setStyleSheet("color: #9a9a9a; font-style: italic;")
+        self.thinking_label.hide()
+        layout.addWidget(self.thinking_label)
+        self.thinking_timer = QTimer(self)
+        self.thinking_timer.setInterval(1000)
+        self.thinking_timer.timeout.connect(self._update_thinking)
+
         layout.addLayout(input_row)
+
+    def start_thinking(self):
+        self.pending += 1
+        if self.pending == 1:
+            self.thinking_since = time.monotonic()
+            self._update_thinking()
+            self.thinking_label.show()
+            self.thinking_timer.start()
+
+    def stop_thinking(self):
+        """Hide the indicator once nothing is pending; return seconds waited."""
+        elapsed = time.monotonic() - self.thinking_since
+        self.pending = max(0, self.pending - 1)
+        if self.pending == 0:
+            self.thinking_timer.stop()
+            self.thinking_label.hide()
+        return elapsed
+
+    def _update_thinking(self):
+        seconds = int(time.monotonic() - self.thinking_since)
+        waiting = f" ({self.pending} requests)" if self.pending > 1 else ""
+        self.thinking_label.setText(
+            f"{self.bot_name} is thinking... {seconds}s{waiting}"
+        )
 
     def add_message(self, speaker, message):
         # A user message sits on the right. A bot message sits on the left.
@@ -349,9 +389,11 @@ class MainWindow(QMainWindow):
         if command_lower == "clear" or command_lower == "cls":
             self.console.clear()
         elif command_lower == "help":
-            self.write_log("Commands: clear, cls, help, status")
+            self.write_log("Commands: clear, cls, help, status, exit, quit")
         elif command_lower == "status":
             self.write_log("Files sent: " + str(self.files_sent))
+        elif command_lower in ("exit", "quit"):
+            self.close()
         else:
             self.write_log("Unknown command: " + command)
 
@@ -420,6 +462,7 @@ class MainWindow(QMainWindow):
     def handle_tutor_event(self, event):
         header, message = event
         self.write_log("Tutor: processing request")
+        self.tutor.start_thinking()
         self.start_agent_task(
             header, lambda: self.assistant.ask_tutor(message)
         )
@@ -427,6 +470,7 @@ class MainWindow(QMainWindow):
     def handle_quiz_event(self, event):
         header, message = event
         self.write_log("Quiz: processing request")
+        self.quiz.start_thinking()
         self.start_agent_task(
             header, lambda: self.assistant.ask_quiz(message)
         )
@@ -460,15 +504,17 @@ class MainWindow(QMainWindow):
     def receive_response(self, header, payload):
         # This slot is invoked on the Qt UI thread by the worker's signal.
         if header == "t":
+            elapsed = self.tutor.stop_thinking()
             message = str(payload)
             self.tutor.history.append(("assistant", message))
             self.tutor.add_message("assistant", message)
-            self.write_log("Tutor: response received")
+            self.write_log(f"Tutor: response received ({elapsed:.0f}s)")
         elif header == "q":
+            elapsed = self.quiz.stop_thinking()
             message = str(payload)
             self.quiz.history.append(("assistant", message))
             self.quiz.add_message("assistant", message)
-            self.write_log("Quiz: response received")
+            self.write_log(f"Quiz: response received ({elapsed:.0f}s)")
         elif header == "f":
             if payload is None:
                 self.write_log("Files ingested")
@@ -481,19 +527,59 @@ class MainWindow(QMainWindow):
     def receive_error(self, header, error):
         self.write_log(f"{header}: error: {error}")
         if header == "t":
+            self.tutor.stop_thinking()
             self.tutor.add_message("assistant", f"Error: {error}")
         elif header == "q":
+            self.quiz.stop_thinking()
             self.quiz.add_message("assistant", f"Error: {error}")
         elif header == "f":
             self.progress_label.setText("")
             self.progress_bar.hide()
 
 
-if __name__ == "__main__":
+def install_signal_handlers(app):
+    """Quit cleanly on SIGTERM (kill, logout) and SIGINT (Ctrl+C in the terminal).
+
+    Python only runs signal handlers when the interpreter gets control, and
+    Qt's event loop is C++, so a no-op timer hands control back every 200 ms.
+    The timer is returned so the caller keeps it alive.
+    """
+    def stop(signum, frame):
+        print(f"\nReceived {signal.Signals(signum).name}, shutting down.", flush=True)
+        app.quit()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, stop)
+
+    wake = QTimer()
+    wake.timeout.connect(lambda: None)
+    wake.start(200)
+    return wake
+
+
+def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
 
     window = MainWindow()
     window.show()
-    sys.exit(app.exec())
+    wake = install_signal_handlers(app)
+
+    code = app.exec()
+    wake.stop()
+
+    # A model call still running would hold the process open until it
+    # finished (up to a minute on CPU) and then emit into the deleted window.
+    # Leave without waiting for it. An interrupted ingest is safe: the pipeline
+    # records a document only after its index write, and repairs drift on the
+    # next run (docs/ingest-pipeline.md section 3).
+    if QThreadPool.globalInstance().activeThreadCount():
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(code)
+    sys.exit(code)
+
+
+if __name__ == "__main__":
+    main()
