@@ -30,93 +30,37 @@ The document index is held in memory for the duration of this program.
 from __future__ import annotations
 
 import argparse
-import math
 import os
-import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 import ollama
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from ingest import cli
+from ingest import ingest_document
 from ingest.embedder import Embedder, OllamaBackend
 from ingest.index import INDEX_DIR, ChunkIndex, Hit
+from ingest.model import Outcome, Result
+
+# Outcomes after which the document is in the index and retrievable.
+RETRIEVABLE = {Outcome.INDEXED, Outcome.ALREADY_INDEXED}
 
 
-SUPPORTED_TEXT = {".txt", ".md", ".rst", ".csv", ".json", ".py", ".java",
-                  ".c", ".cpp", ".h", ".hpp", ".html", ".xml", ".yaml", ".yml"}
-CHUNK_SIZE = 1200
-CHUNK_OVERLAP = 200
+def describe(result: Result) -> str:
+    """One display line for an ingest Result.
 
-
-@dataclass
-class Chunk:
-    text: str
-    source: str
-    embedding: list[float]
-
-
-def read_file(path: Path) -> str:
-    """Extract text from a supported file."""
-    suffix = path.suffix.lower()
-
-    if suffix in SUPPORTED_TEXT:
-        return path.read_text(encoding="utf-8", errors="replace")
-
-    if suffix == ".pdf":
-        try:
-            from pypdf import PdfReader
-        except ImportError as exc:
-            raise RuntimeError("PDF support requires: pip install pypdf") from exc
-        reader = PdfReader(str(path))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
-
-    if suffix == ".docx":
-        try:
-            from docx import Document
-        except ImportError as exc:
-            raise RuntimeError("DOCX support requires: pip install python-docx") from exc
-        document = Document(str(path))
-        return "\n".join(p.text for p in document.paragraphs)
-
-    raise ValueError(f"Unsupported file type: {suffix or '(no extension)'}")
-
-
-def split_into_chunks(text: str, size: int = CHUNK_SIZE,
-                      overlap: int = CHUNK_OVERLAP) -> list[str]:
-    """Split text into overlapping chunks, preferring paragraph boundaries."""
-    text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
-    if not text:
-        return []
-
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = min(start + size, len(text))
-        if end < len(text):
-            boundary = text.rfind("\n", start + size // 2, end)
-            if boundary > start:
-                end = boundary
-
-        piece = text[start:end].strip()
-        if piece:
-            chunks.append(piece)
-        if end >= len(text):
-            break
-        start = max(end - overlap, start + 1)
-
-    return chunks
-
-
-def cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(y * y for y in b))
-    if not norm_a or not norm_b:
-        return 0.0
-    return dot / (norm_a * norm_b)
+    Built only from fields the interface contract marks display-safe: the
+    outcome, counts, Result.message, and a flag's pattern and page. Never the
+    flagged excerpt, which is document text (interface doc 6).
+    """
+    line = f"{result.document_name}: {result.outcome.value}"
+    if result.chunk_count is not None:
+        line += f" ({result.chunk_count} chunks)"
+    if result.message:
+        line += f" - {result.message}"
+    for flag in result.flagged or []:
+        where = f"page {flag.page}" if flag.page is not None else "unknown page"
+        line += f"\n    flagged on {where}: {flag.pattern}"
+    return line
 
 
 class KnowledgeBase:
@@ -139,7 +83,6 @@ class KnowledgeBase:
             embedder if embedder is not None else Embedder(OllamaBackend(embedding_model))
         )
         self._index: ChunkIndex | None = None
-        self.chunks: list[Chunk] = []
         self.files: list[str] = []
 
     def invalidate(self) -> None:
@@ -158,50 +101,39 @@ class KnowledgeBase:
             )
         return self._index
 
-    def _embed(self, texts: list[str]) -> list[list[float]]:
-        # The Ollama Python package returns one embedding per input string.
-        response = ollama.embed(model=self.embedding_model, input=texts)
-        return response["embeddings"]
+    def ingest(self, data: bytes, filename: str) -> Result:
+        """Run one document through the pipeline; return its final Result.
 
-    def add_files(self, filenames: Iterable[str]) -> None:
-        added_any = False
+        The pipeline validates, screens, chunks, embeds and indexes, and
+        refuses anything it should not store, so nothing it rejects can become
+        retrievable here.
+        """
+        result: Result | None = None
+        for event in ingest_document(
+            data, filename, embedder=self.embedder, index_dir=self.index_dir
+        ):
+            if isinstance(event, Result):
+                result = event
+        self.invalidate()
+        if result is None:
+            # The contract promises exactly one Result; not reachable.
+            raise RuntimeError("ingest_document finished without a Result")
+        if result.outcome in RETRIEVABLE and result.document_name not in self.files:
+            self.files.append(result.document_name)
+        return result
+
+    def add_files(self, filenames: Iterable[str]) -> list[str]:
+        """Ingest each file; return one display line per file."""
+        lines = []
         for filename in filenames:
             path = Path(filename).expanduser()
-            if not path.is_file():
-                print(f"[skip] File not found: {path}")
-                continue
-
-            resolved = str(path.resolve())
-            if resolved in self.files:
-                print(f"[skip] Already ingested: {path}")
-                continue
-
             try:
-                text = read_file(path)
-                pieces = split_into_chunks(text)
-                cli.ingest_path(path, embedder=self.embedder, index_dir=self.index_dir)
-                if not pieces:
-                    print(f"[skip] No extractable text: {path}")
-                    continue
-
-                print(f"[index] Embedding {len(pieces)} chunk(s) from {path.name}...")
-                vectors = self._embed(pieces)
-                if len(vectors) != len(pieces):
-                    raise RuntimeError("Ollama returned an unexpected number of embeddings.")
-
-                self.chunks.extend(
-                    Chunk(piece, path.name, vector)
-                    for piece, vector in zip(pieces, vectors)
-                )
-                self.files.append(resolved)
-                print(f"[ok] Added {path.name}")
-                added_any = True
-            except Exception as exc:
-                print(f"[error] Could not ingest {path}: {exc}")
-
-        self.invalidate()
-        if added_any:
-            print(f"[index] Knowledge base now contains {len(self.chunks)} chunks.")
+                data = path.read_bytes()
+            except OSError:
+                lines.append(f"{path.name}: could not be read")
+                continue
+            lines.append(describe(self.ingest(data, path.name)))
+        return lines
 
     def retrieve(self, query: str, top_k: int = 5) -> list[Hit]:
         """The top_k most similar indexed chunks, best first."""
@@ -365,7 +297,8 @@ def main():
 
     knowledge = KnowledgeBase(args.embedding_model)
     if args.files:
-        knowledge.add_files(args.files)
+        for line in knowledge.add_files(args.files):
+            print(line)
 
     tutor, quiz = build_bots(knowledge, args.model, args.top_k)
 
@@ -406,7 +339,8 @@ def main():
             if not payload:
                 print("Usage: add file1.pdf file2.txt")
             else:
-                knowledge.add_files(payload.split())
+                for line in knowledge.add_files(payload.split()):
+                    print(line)
             continue
 
         if action == "tutor":
