@@ -36,13 +36,10 @@ from typing import Iterable
 
 import ollama
 
-from ingest import ingest_document
+from ingest import ingest_document, manifest
 from ingest.embedder import Embedder, OllamaBackend
 from ingest.index import INDEX_DIR, ChunkIndex, Hit
-from ingest.model import Outcome, Result
-
-# Outcomes after which the document is in the index and retrievable.
-RETRIEVABLE = {Outcome.INDEXED, Outcome.ALREADY_INDEXED}
+from ingest.model import Result
 
 
 def describe(result: Result) -> str:
@@ -83,7 +80,6 @@ class KnowledgeBase:
             embedder if embedder is not None else Embedder(OllamaBackend(embedding_model))
         )
         self._index: ChunkIndex | None = None
-        self.files: list[str] = []
 
     def invalidate(self) -> None:
         """Drop the cached index, so the next retrieve sees new documents."""
@@ -118,9 +114,28 @@ class KnowledgeBase:
         if result is None:
             # The contract promises exactly one Result; not reachable.
             raise RuntimeError("ingest_document finished without a Result")
-        if result.outcome in RETRIEVABLE and result.document_name not in self.files:
-            self.files.append(result.document_name)
         return result
+
+    def sources(self) -> list[str]:
+        """Names of the documents retrieve() can actually return, sorted.
+
+        Read from the index rather than kept per session, so it survives a
+        restart and cannot list a document that was refused. Names come from
+        the manifest, which records the name a document was first uploaded
+        under: the same bytes under a second name are one document, listed
+        once.
+        """
+        index = self._loaded()
+        if index is None:
+            return []
+        known = manifest.entries()
+        names = []
+        for doc_id in index.documents():
+            entry = known.get(doc_id)
+            # Vectors with no manifest entry are drift that verify() reports;
+            # still retrievable, so still listed, under a short id.
+            names.append(entry["document_name"] if entry else f"(unrecorded {doc_id[:12]})")
+        return sorted(names, key=str.lower)
 
     def add_files(self, filenames: Iterable[str]) -> list[str]:
         """Ingest each file; return one display line per file."""
@@ -277,8 +292,8 @@ class StudyAssistant:
         return self.knowledge.add_files(filenames)
 
     def list_sources(self) -> list[str]:
-        """Return the paths of documents currently indexed."""
-        return list(self.knowledge.files)
+        """Names of the documents currently indexed, across sessions."""
+        return self.knowledge.sources()
 
 
 def main():
@@ -324,8 +339,9 @@ def main():
             print_help()
             continue
         if command.lower() == "sources":
-            if knowledge.files:
-                for filename in knowledge.files:
+            names = knowledge.sources()
+            if names:
+                for filename in names:
                     print(f" - {filename}")
             else:
                 print("No files have been ingested.")
