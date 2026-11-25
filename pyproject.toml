@@ -15,13 +15,7 @@ dependencies = [
     "cryptography>=43.0", # AES-256-GCM for the bonus encrypted index (R2)
     "faiss-cpu>=1.15.0",  # IndexFlatIP + serialize_index (TUT-58)
     "numpy>=2.0",         # faiss's array interface; imported directly, so declared
-]
-
-[project.optional-dependencies]
-# Declared but deliberately NOT installed yet: there is no UI module, so the
-# pipeline is driven from ingest/cli.py. Install with: uv sync --extra ui
-ui = [
-    "streamlit>=1.39.0",
+    "pyside6>=6.8",       # desktop UI, ui/main.py
 ]
 
 [dependency-groups]

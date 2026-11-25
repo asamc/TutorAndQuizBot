@@ -42,15 +42,8 @@ Ollama runtime the project already depends on (architecture doc 5.1), so the sec
 and its ~2–3 GB are gone, along with the Linux CPU-only `torch` index override that existed to keep
 it from dragging in ~18 CUDA packages.
 
-### Optional extra — not needed yet
-
-```bash
-uv sync --extra ui
-```
-
-`--extra ui` adds `streamlit`, and nothing else. There is no UI module yet, so the pipeline is
-driven from `ingest/cli.py`; pull this in when the UI (TUT-10) lands. The extra was called `ml`
-until TUT-66 emptied it of everything but Streamlit.
+`pyside6` is also a default dependency, for the desktop UI in `ui/main.py`. It replaces the
+`ui` extra, which only ever held `streamlit` and was never used.
 
 ### Without uv
 
