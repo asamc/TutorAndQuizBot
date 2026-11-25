@@ -41,6 +41,8 @@ import ollama
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ingest import cli
+from ingest.embedder import Embedder, OllamaBackend
+from ingest.index import INDEX_DIR, ChunkIndex, Hit
 
 
 SUPPORTED_TEXT = {".txt", ".md", ".rst", ".csv", ".json", ".py", ".java",
@@ -118,10 +120,43 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 class KnowledgeBase:
-    def __init__(self, embedding_model: str):
+    """Retrieval over the persistent index that ingest_document() writes.
+
+    `index_dir` and `embedder` are the same test seam ingest_document() takes,
+    so tests need neither Ollama nor the real data/index/.
+    """
+
+    def __init__(
+        self,
+        embedding_model: str,
+        *,
+        index_dir: Path = INDEX_DIR,
+        embedder: Embedder | None = None,
+    ):
         self.embedding_model = embedding_model
+        self.index_dir = index_dir
+        self.embedder = (
+            embedder if embedder is not None else Embedder(OllamaBackend(embedding_model))
+        )
+        self._index: ChunkIndex | None = None
         self.chunks: list[Chunk] = []
         self.files: list[str] = []
+
+    def invalidate(self) -> None:
+        """Drop the cached index, so the next retrieve sees new documents."""
+        self._index = None
+
+    def _loaded(self) -> ChunkIndex | None:
+        """The stored index, or None when nothing has been ingested yet.
+
+        Loaded against the live embedder's spec: an index built with another
+        model raises IndexFailed rather than ranking incomparable vectors.
+        """
+        if self._index is None and ChunkIndex.exists(self.index_dir):
+            self._index = ChunkIndex.load(
+                self.index_dir, expected_spec=self.embedder.spec
+            )
+        return self._index
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
         # The Ollama Python package returns one embedding per input string.
@@ -144,7 +179,7 @@ class KnowledgeBase:
             try:
                 text = read_file(path)
                 pieces = split_into_chunks(text)
-                cli.ingest_path(path)
+                cli.ingest_path(path, embedder=self.embedder, index_dir=self.index_dir)
                 if not pieces:
                     print(f"[skip] No extractable text: {path}")
                     continue
@@ -164,19 +199,16 @@ class KnowledgeBase:
             except Exception as exc:
                 print(f"[error] Could not ingest {path}: {exc}")
 
+        self.invalidate()
         if added_any:
             print(f"[index] Knowledge base now contains {len(self.chunks)} chunks.")
 
-    def retrieve(self, query: str, top_k: int = 5) -> list[Chunk]:
-        if not self.chunks:
+    def retrieve(self, query: str, top_k: int = 5) -> list[Hit]:
+        """The top_k most similar indexed chunks, best first."""
+        index = self._loaded()
+        if index is None or len(index) == 0:
             return []
-        query_embedding = self._embed([query])[0]
-        ranked = sorted(
-            self.chunks,
-            key=lambda chunk: cosine_similarity(query_embedding, chunk.embedding),
-            reverse=True,
-        )
-        return ranked[:min(top_k, len(ranked))]
+        return index.search(self.embedder.embed_query(query), top_k)
 
 
 class StudyBot:
@@ -193,8 +225,8 @@ class StudyBot:
         matches = self.knowledge.retrieve(question, self.top_k)
         if matches:
             context = "\n\n".join(
-                f"[Source: {chunk.source} | Retrieved passage {i}]\n{chunk.text}"
-                for i, chunk in enumerate(matches, start=1)
+                f"[Source: {hit.chunk.document_name} | Retrieved passage {i}]\n{hit.chunk.text}"
+                for i, hit in enumerate(matches, start=1)
             )
         else:
             context = "(No relevant document passages were found.)"
@@ -264,6 +296,9 @@ class StudyAssistant:
         chat_model: str | None = None,
         embedding_model: str | None = None,
         top_k: int = 5,
+        *,
+        index_dir: Path = INDEX_DIR,
+        embedder: Embedder | None = None,
     ):
         self.chat_model = chat_model or os.getenv("OLLAMA_CHAT_MODEL", "llama3.2:3b")
         self.embedding_model = embedding_model or os.getenv(
@@ -272,7 +307,9 @@ class StudyAssistant:
         if top_k < 1:
             raise ValueError("top_k must be at least 1")
 
-        self.knowledge = KnowledgeBase(self.embedding_model)
+        self.knowledge = KnowledgeBase(
+            self.embedding_model, index_dir=index_dir, embedder=embedder
+        )
         self.tutor, self.quiz = build_bots(self.knowledge, self.chat_model, top_k)
 
     def ask_tutor(self, question: str) -> str:
