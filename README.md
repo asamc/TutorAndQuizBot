@@ -182,8 +182,62 @@ Working prototype.
 index, driven by `ingest_document()` and exercised from `ingest/cli.py`. The whole 27-lecture
 semester ingests in about 17 seconds and retrieves with citations down to the slide.
 
-The agents (`agents/agents.py`) and the desktop UI (`ui/main.py`) are in place. Still to come:
-wiring the agents to retrieve from the persistent index, and encryption at rest for the index.
+The agents (`agents/agents.py`) retrieve from the persistent index and ingest only through
+`ingest_document()`, and every answer ends with a Sources list built from what was retrieved. The
+desktop UI (`ui/main.py`) shows a thinking indicator and quits cleanly on Ctrl+C, SIGTERM or
+`exit`. Still to come: see below, plus encryption at rest for the index.
+
+## Resuming on a new machine
+
+Work in progress is on the `Embedding/Wiring` branch.
+
+1. **Get the code and dependencies.**
+   ```bash
+   git clone https://github.com/asamc/TutorAndQuizBot.git && cd TutorAndQuizBot
+   git checkout Embedding/Wiring
+   uv sync
+   ```
+2. **Install Ollama and the models** (see [SETUP.md](SETUP.md)):
+   `ollama pull llama3.2:3b` and `ollama pull nomic-embed-text`.
+3. **Linux only:** `sudo apt install libxcb-cursor0`, or the UI fails with "Could not load the Qt
+   platform plugin xcb". Alternatively launch it with `QT_QPA_PLATFORM=wayland`.
+4. **Rebuild the index.** `data/` is gitignored, so a new machine starts with no index, and the
+   manifest at `~/.tutorandquizbot/` stays behind on the old machine too. Re-ingest the lecture
+   files from wherever you keep them:
+   ```bash
+   uv run python -m ingest.cli path/to/lectures/*.pdf
+   ```
+5. **Check it works.** Run everything from the repo root, because the index path is relative:
+   ```bash
+   uv run pytest -q                 # all tests pass
+   uv run python -m agents.agents   # then: sources, tutor what is integrity?
+   uv run python -m ui.main
+   ```
+   On a CPU-only machine an answer takes 15–60 s, and the panel shows "thinking..." meanwhile.
+
+### Next steps
+
+- [ ] **Fix the misleading "model not installed" error when Ollama is down.**
+  `OllamaBackend.spec()` in `ingest/embedder.py` treats a refused connection as a missing model.
+  Classify `ConnectionError` the way `embed()` already does, and add a test to `tests/test_embedder.py`.
+- [ ] **Add tests for the agents** in `tests/test_agents.py`. Reuse `FakeBackend` from
+  `tests/test_orchestrator.py` and stub `ollama.chat`. Cover:
+  - no index gives no passages
+  - an uploaded file is cited
+  - a refused file is not retrievable
+  - the index survives a restart
+  - a spec mismatch raises `IndexFailed`
+  - `list_sources()` shows only indexed documents
+- [ ] **Silence the `RuntimeWarning` on `python -m agents.agents`:** make the import in
+  `agents/__init__.py` lazy.
+- [ ] **Optional, check with Asa first:** have the UI pass upload bytes straight to the pipeline
+  instead of writing `uploaded_documents/`, and drop `.docx` from the file dialog, since the
+  pipeline rejects DOCX.
+- [ ] **Docs:**
+  - update the `agents/agents.py` module docstring
+  - replace the "Streamlit UI" mentions in `docs/`, since the UI is PySide6
+  - add the `libxcb-cursor0` note to SETUP.md
+- [ ] **Open a PR** from `Embedding/Wiring` into `main`.
 
 ## Team Contributions
 
